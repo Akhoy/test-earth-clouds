@@ -193,6 +193,31 @@ def _month_for_snow_climatology(now: datetime) -> datetime:
     return last_of_prev_month.replace(day=15)
 
 
+GIBS_WMS_URL = "https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi"
+
+
+def _gibs_get(params: dict) -> requests.Response:
+    """(test repo) Same NASA GIBS image, two servers: GIBS's own WMS first, then the Worldview snapshot API (which
+    returned 503 to GitHub's runners on 2026-11-15).  Both render identical pixels for these layers."""
+    wms = {"SERVICE": "WMS", "REQUEST": "GetMap", "VERSION": "1.3.0", "LAYERS": params["LAYERS"], "STYLES": "",
+           "CRS": "EPSG:4326", "BBOX": params["BBOX"], "WIDTH": params["WIDTH"], "HEIGHT": params["HEIGHT"],
+           "FORMAT": "image/png", "TRANSPARENT": "TRUE", "TIME": params["TIME"]}
+    last = None
+    for url, p in ((GIBS_WMS_URL, wms), (SNOW_ICE_SNAPSHOT_URL, params)):
+        for attempt in range(3):
+            try:
+                resp = requests.get(url, params=p, timeout=120)
+                resp.raise_for_status()
+                if not resp.headers.get("content-type", "").startswith("image"):
+                    raise requests.RequestException(f"not an image: {resp.headers.get('content-type')}")
+                return resp
+            except requests.RequestException as exc:
+                last = exc
+                logger.warning("%s attempt %d failed: %s", url, attempt + 1, exc)
+                time.sleep(3 * (attempt + 1))
+    raise last
+
+
 def _fetch_snow_ice_fraction(width: int, height: int) -> np.ndarray:
     """Monthly snow/ice-cover fraction (0..1) on this module's canvas,
     cached per calendar month. Falls back to an older cached month, then to
@@ -214,8 +239,7 @@ def _fetch_snow_ice_fraction(width: int, height: int) -> np.ndarray:
             "WIDTH": str(width),
             "HEIGHT": str(height),
         }
-        resp = requests.get(SNOW_ICE_SNAPSHOT_URL, params=params, timeout=90)
-        resp.raise_for_status()
+        resp = _gibs_get(params)
         rgba = np.array(Image.open(BytesIO(resp.content)).convert("RGBA")).astype(np.float32)
         # Colour ramp runs white (0%) to pure red (100%), so green falls
         # monotonically with snow cover; transparent means no snow.
@@ -303,8 +327,7 @@ def _fetch_elevation(width: int, height: int) -> np.ndarray:
             "CRS": "EPSG:4326", "LAYERS": ELEVATION_LAYER, "WRAP": "day",
             "FORMAT": "image/png", "WIDTH": str(width), "HEIGHT": str(height),
         }
-        resp = requests.get(SNOW_ICE_SNAPSHOT_URL, params=params, timeout=90)
-        resp.raise_for_status()
+        resp = _gibs_get(params)
         red = np.array(Image.open(BytesIO(resp.content)).convert("RGB"))[..., 0].astype(np.float32)
     except Exception:
         logger.exception("elevation fetch failed; high terrain will not be excluded this run")
