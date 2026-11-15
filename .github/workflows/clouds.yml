@@ -1,0 +1,57 @@
+name: Build and publish cloud mask (every 3 hours)
+
+on:
+  schedule:
+    # Every 3 hours, ~1.5 h after each 00/03/.../21Z scan (EUMETSAT and NOAA need that long to publish).  GitHub's
+    # scheduler can fire late; run.py always picks the latest complete slot at the time it actually runs.
+    - cron: "35 1-23/3 * * *"
+  workflow_dispatch:
+    inputs:
+      slot:
+        description: "YYYYmmddTHH (optional; default = latest complete slot)"
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: clouds
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Fixed inputs reused across runs: Himawari's lat/lon grid (first run downloads one full ~350 MB file),
+      # the terrain proxy and the monthly snow climatology.
+      - name: Restore cache
+        uses: actions/cache@v4
+        with:
+          path: cache
+          key: clouds-cache-${{ github.run_id }}
+          restore-keys: clouds-cache-
+
+      - name: Build cloud mask
+        run: |
+          python clouds/run.py --out site \
+            --base-url "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}" \
+            ${{ github.event.inputs.slot && format('--slot {0}', github.event.inputs.slot) || '' }}
+
+      - name: Publish to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: site
+          keep_files: false
+          force_orphan: true
