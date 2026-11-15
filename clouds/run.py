@@ -36,6 +36,17 @@ def latest_slot(now: datetime) -> datetime:
     return t.replace(hour=t.hour - t.hour % 3, minute=0, second=0, microsecond=0)
 
 
+def seed_static_cache() -> None:
+    """NASA's snapshot API (terrain proxy, monthly snow climatology) often does not answer GitHub's runners.  Seed
+    visir's cache from the copies in assets/ so a failed fetch falls back to them instead of to 'no terrain/snow'.
+    The snow fetch still runs first each month and wins when it succeeds."""
+    V.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    for src in (Path(__file__).parent.parent / "assets").glob("*.npz"):
+        dst = V.CACHE_DIR / (src.stem + ".npy")
+        if not dst.exists():
+            np.save(dst, np.load(src)["a"])
+
+
 def fetch_visir_layers(t: datetime) -> dict:
     iso = t.strftime("%Y-%m-%dT%H:%M:%S.000Z"); h = W // 2
     jobs = [(k, lay, bb) for k, lay in (("vis", V.LAYER_VISIBLE), ("ir", V.LAYER_IR), ("dust", V.LAYER_DUST))
@@ -70,6 +81,7 @@ def main() -> int:
     ap.add_argument("--slot", help="YYYYmmddTHH (default: latest complete)")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    seed_static_cache()
 
     first = datetime.strptime(a.slot, "%Y%m%dT%H").replace(tzinfo=timezone.utc) if a.slot else latest_slot(datetime.now(timezone.utc))
     for t in (first, first - timedelta(hours=3)):
