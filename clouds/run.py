@@ -25,6 +25,7 @@ import visir as V                                              # noqa: E402
 from sat_masks import fetch_flags                              # noqa: E402
 from cubemap import equirect_to_cubemap, FACE_ORDER            # noqa: E402
 from dxt1 import encode_tile_to_dds                            # noqa: E402
+import debug                                                   # noqa: E402
 
 W = 4096
 FACE_SIZE, TILE_SIZE = 1024, 256
@@ -79,10 +80,29 @@ def main() -> int:
     ap.add_argument("--out", default="site")
     ap.add_argument("--base-url", required=True)
     ap.add_argument("--slot", help="YYYYmmddTHH (default: latest complete)")
+    ap.add_argument("--skip-if-current", metavar="ROOT_JSON_URL",
+                    help="exit without building when this published root.json already points at the latest slot")
+    ap.add_argument("--raw", help="npz: load the fetched inputs from here if it exists, else save them there (local tuning)")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     seed_static_cache()
+    debug.record_urls()
 
+    if a.raw and Path(a.raw).exists():
+        R = np.load(a.raw, allow_pickle=True)
+        t = datetime.fromisoformat(str(R["slot"])); L = {k: R[k] for k in ("vis", "ir", "dust", "elev", "snow")}
+        per = R["per"].item(); used = list(per); flags = np.max(np.stack(list(per.values())), 0)
+        log.info("loaded inputs for %s from %s", t, a.raw)
+        return finish(a, t, L, flags, used, per)
+    if a.skip_if_current and not a.slot:
+        import requests
+        try:
+            cur = requests.get(a.skip_if_current, timeout=30).json()["baseUrl"].rstrip("/").split("/")[-1]
+        except Exception:
+            cur = None
+        want = f"{latest_slot(datetime.now(timezone.utc)):%Y%m%dT%H}Z"
+        if cur == want:
+            log.info("published root.json already at %s: nothing to do", want); return 0
     first = datetime.strptime(a.slot, "%Y%m%dT%H").replace(tzinfo=timezone.utc) if a.slot else latest_slot(datetime.now(timezone.utc))
     for t in (first, first - timedelta(hours=3)):
         try:
@@ -93,16 +113,26 @@ def main() -> int:
     else:
         log.error("no usable EUMETSAT slot"); return 1
 
-    flags, used = fetch_flags(t, W)
+    flags, used, per = fetch_flags(t, W)
     log.info("satellite masks used: %s", ", ".join(used) or "none")
+    if a.raw:
+        np.savez(a.raw, slot=t.isoformat(), per=np.array(per, dtype=object), **L)
+    return finish(a, t, L, flags, used, per)
+
+
+def finish(a, t, L, flags, used, per) -> int:
     flags = np.roll(flags, W // 2, axis=1)                       # Americas-first -> visir's Greenwich-first
-    mask = V._compute_mask(L["vis"], L["ir"], L["dust"], L["snow"], L["elev"], flags)
+    parts = {}
+    mask = V._compute_mask(L["vis"], L["ir"], L["dust"], L["snow"], L["elev"], flags, parts)
     mask = np.roll(mask, W // 2, axis=1)                         # -> Americas-first, as the tiles expect
 
     out = Path(a.out); vid = f"{t:%Y%m%dT%H}Z"
     vdir = out / "versions" / vid
     n = write_tiles(mask, vdir)
     Image.fromarray(mask).save(vdir / "_debug_cloud_mask.png")
+    debug.land_debug(mask).save(vdir / "_debug_cloud_mask_land.png")
+    debug.source_map(parts, {k: np.roll(v, W // 2, 1) for k, v in per.items()}, mask).save(vdir / "_debug_sources.png")
+    debug.write_urls(vdir / "_sources.txt")
     (vdir / "_info.json").write_text(json.dumps({"slot": t.isoformat(), "built": datetime.now(timezone.utc).isoformat(),
                                                  "masks": used, "mean": round(float(mask.mean()) / 255, 4)}, indent=1))
     (out / "root.json").write_text(json.dumps({"baseUrl": f"{a.base_url.rstrip('/')}/versions/{vid}/"}))

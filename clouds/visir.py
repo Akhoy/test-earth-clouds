@@ -101,6 +101,7 @@ HIDDEN_FINAL_GAMMA = 2.0
 # with a 1 px blur (slightly less sharp); haze = 8% of the cloud field blurred ~12 px (at 4096 wide), added on top.
 THIN_TEXTURE_RANGE = 24.0
 SEA_HAZE = 0.0   # off (user, 2026-11-15). Tried 0.02, 0.04; 2026-11-15: 0.09 / 0.14 / 0.10 too much (grey, "slightly purple"); user: "a tiny bit"
+VISIBLE_GROUND_MARGIN = 0.08   # (test repo) visible counts as cloud only this far above the measured clear ground
 NASA_TONE_IN = [0.0, 0.008, 0.02, 0.047, 0.09, 0.133, 0.18, 0.231, 0.278, 0.329, 0.38, 0.443, 0.502, 0.565, 0.655,
                 0.765, 0.886, 0.988, 1.0]
 NASA_TONE_OUT = [0.06, 0.098, 0.133, 0.169, 0.208, 0.247, 0.29, 0.337, 0.384, 0.431, 0.482, 0.537, 0.6, 0.663, 0.722,
@@ -388,9 +389,26 @@ def _sea_weight(height: int, width: int) -> np.ndarray:
     return (1.0 - gaussian_filter(land, sigma=width / 2048, mode=("nearest", "wrap"))) * (1.0 - land)
 
 
+def _clear_ground_level(blue: np.ndarray, clear_px: np.ndarray, cell: int = 64) -> np.ndarray:
+    """(test repo) Median blue-channel brightness of clear pixels per ~5.6 deg cell (at 4096 wide), gaps filled from the
+    nearest measured cell, smoothed, upsampled.  0 where no clear pixel was ever measured nearby."""
+    from scipy.ndimage import distance_transform_edt, zoom
+    h, w = blue.shape; gh, gw = h // cell, w // cell
+    v = np.where(clear_px, blue, np.nan)[:gh * cell, :gw * cell].reshape(gh, cell, gw, cell).transpose(0, 2, 1, 3).reshape(gh, gw, -1)
+    n = np.isfinite(v).sum(-1)
+    with np.errstate(all="ignore"):
+        lvl = np.where(n >= 20, np.nanmedian(v, -1), np.nan)
+    if np.isnan(lvl).all():
+        return np.zeros_like(blue)
+    hole = np.isnan(lvl)
+    lvl = lvl[tuple(distance_transform_edt(hole, return_distances=False, return_indices=True))]
+    lvl = gaussian_filter(lvl, 1.0, mode=("nearest", "wrap"))
+    return zoom(lvl, (h / gh, w / gw), order=1, mode="grid-wrap")
+
+
 def _compute_mask(
     vis: np.ndarray, ir: np.ndarray, dust: np.ndarray, snow_ice_fraction: np.ndarray, elevation: np.ndarray,
-    flags: np.ndarray | None = None,
+    flags: np.ndarray | None = None, parts: dict | None = None,
 ) -> np.ndarray:
     """flags (cloud_pipeline): optional 0..1 map of 'a geostationary cloud mask says cloud' (CLM x2, GOES-E/W,
     Himawari; viewing-angle faded, same canvas as vis).  When given it replaces the IR+dust thin layer."""
@@ -404,6 +422,13 @@ def _compute_mask(
     ir_score = np.clip((ir_sharp - clear) / (IR_CLOUD - clear), 0, 1) ** IR_GAMMA
 
     daylight = _visible_weight(vis)
+    if flags is not None:
+        # (test repo) Bright ground is not cloud: sunlit desert (Sahara, Arabia) passes the fixed VISIBLE_CLEAR in the
+        # blue channel and washed those regions out by day.  Measure each region's clear-ground brightness where the
+        # satellite masks AND IR both say clear, and count only what is brighter than that as cloud.
+        clear_px = (flags < 0.15) & (ir_score < 0.08) & (daylight > 0.3)
+        threshold_vis = np.maximum(VISIBLE_CLEAR, _clear_ground_level(blue, clear_px) + VISIBLE_GROUND_MARGIN)
+        vis_score = np.clip((blue - threshold_vis) / np.maximum(VISIBLE_CLOUD - threshold_vis, 0.15), 0, 1) ** VISIBLE_GAMMA
     if flags is None:
         thin = THIN_LAYER_OPACITY * _hidden_land_weight(ir_gray, elevation) * (1.0 - daylight) * _ir_dust_score(ir_gray, dust)
     else:
@@ -411,12 +436,17 @@ def _compute_mask(
         # decides how it LOOKS (painting the binary flags directly read as flat, comic-like fills).  By day only where
         # visible shows no cloud nearby.
         lack = np.clip(1.0 - gaussian_filter(vis_score * daylight, sigma=ir_gray.shape[1] / 1000, mode=("nearest", "wrap")) / 0.25, 0, 1)
-        where = np.maximum(_hidden_land_weight(ir_gray, elevation) * (1.0 - daylight), flags * ((1.0 - daylight) + daylight * lack))
+        cold = _hidden_land_weight(ir_gray, elevation) * (1.0 - daylight)
+        where = np.maximum(cold, flags * ((1.0 - daylight) + daylight * lack))
         thin = THIN_LAYER_OPACITY * where * _ir_dust_score(ir_gray, dust)
     # (cloud_pipeline copy) The dust product is coarse, so the thin layer was a smooth texture-less fill that read as
     # blotches on the phone.  Give it the IR's own local structure: same cloud, real texture.
     ir_tex = np.clip(0.5 + (ir_gray - gaussian_filter(ir_gray, sigma=ir_gray.shape[1] / 500, mode=("nearest", "wrap"))) / THIN_TEXTURE_RANGE, 0, 1)
     thin = thin * (1.0 - THIN_TEXTURE_DEPTH + THIN_TEXTURE_DEPTH * 2.0 * ir_tex).clip(0, 1)
+    if parts is not None:                                       # (test repo) for the source map
+        parts.update(vis=vis_score, ir=ir_score, day=daylight, thin=thin)
+        if flags is not None:
+            parts.update(lack=lack, cold=cold)
     ir_score = np.maximum(ir_score, thin)
 
     # Inside the daylit footprint the brighter of the two wins; the weight

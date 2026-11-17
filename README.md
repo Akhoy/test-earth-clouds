@@ -3,7 +3,8 @@
 Test feed for the Earth live wallpaper's cloud layer (`com.breel.wallpapers18`). It runs for a few days before
 anything moves to the main repo, [pixel-earth-wallpaper-live-clouds](https://github.com/Akhoy/pixel-earth-wallpaper-live-clouds).
 
-Every 3 hours a GitHub Actions job builds one grey cloud mask for the latest complete satellite slot. It publishes
+A GitHub Actions job builds one grey cloud mask for each 3-hour satellite slot. It tries hourly, because GitHub's
+schedule often skips runs, and does nothing when the latest slot is already published. It publishes
 the mask to GitHub Pages in the app's `cloudMap` format: `root.json` plus 96 DDS tiles under `versions/<slot>/`.
 The test APK reads `https://akhoy.github.io/test-earth-clouds/root.json`.
 
@@ -18,6 +19,14 @@ The test APK reads `https://akhoy.github.io/test-earth-clouds/root.json`.
   day the masks only add cloud where visible shows almost none.
 - **The finish** is a slight softening, a faint wide haze, and a tone curve matched to NASA VIIRS true-colour
   cloud masks.
+
+## Files next to each mask (`versions/<slot>/`)
+- `_debug_cloud_mask.png`: the published mask.
+- `_debug_cloud_mask_land.png`: the same mask with every continent drawn at one faint level, for orientation.
+- `_debug_sources.png`: which part produced each pixel's cloud (IR, visible, the thin layer placed by each satellite
+  or by the cold-land rule), with each part's share of the map.
+- `_sources.txt`: every URL requested to build it.
+- `_info.json`: slot, build time, masks used, mean.
 
 ## Run locally
 ```

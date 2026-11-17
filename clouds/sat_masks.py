@@ -8,7 +8,7 @@ lon -180 at column 0) that visir.py uses to decide where its thin cloud layer go
                  range-read (~3 MB of a ~350 MB file).  Its fixed lat/lon grid is read once from one full file and kept
                  in cache/h09_latlon.npz (restored by the workflow's cache step).
 
-Each mask is faded by viewing angle (full within 55 deg of the sub-point, 0 at 70: near the limb every mask calls
+Each mask is faded by viewing angle (full within 45 deg of the sub-point, 0 at 62: toward the limb every mask calls
 nearly everything cloud) and its edges softened ~2 px; the result is the max over the five."""
 from __future__ import annotations
 
@@ -217,13 +217,15 @@ def _view_fade(lon0: float, W: int) -> np.ndarray:
     lat = np.radians(90 - (np.arange(H_) + 0.5) / H_ * 180)[:, None]
     lon = np.radians(-180 + (np.arange(W) + 0.5) / W * 360)[None, :]
     ang = np.degrees(np.arccos(np.clip(np.cos(lat) * np.cos(lon - np.radians(lon0)), -1, 1)))
-    t = np.clip((ang - 55) / 15, 0, 1)
+    # Full trust within 45 deg of the sub-point, 0 at 62: beyond ~45 deg the masks over-flag (S Indian Ocean / south
+    # of Australia came out 64% vs NASA 49% on 2026-11-16 with the old 55..70 fade).
+    t = np.clip((ang - 45) / 17, 0, 1)
     return 1 - t * t * (3 - 2 * t)
 
 
-def fetch_flags(t: datetime, W: int = 4096) -> tuple[np.ndarray, list[str]]:
+def fetch_flags(t: datetime, W: int = 4096) -> tuple[np.ndarray, list[str], dict]:
     """Max over the 5 masks of (cloud flag, softened ~2 px) x viewing-angle fade.  Americas-first.  A source that
-    fails is skipped and reported; returns (flags, names of sources used)."""
+    fails is skipped and reported; returns (flags, names of sources used, {name: that source's faded flags})."""
     jobs = {
         "Meteosat 0 CLM": (lambda: _clm_equirect(SECTORS[0], t, W), 0.0),
         "Meteosat 45.5E CLM": (lambda: _clm_equirect(SECTORS[1], t, W), 45.5),
@@ -231,7 +233,7 @@ def fetch_flags(t: datetime, W: int = 4096) -> tuple[np.ndarray, list[str]]:
         "GOES-West": (lambda: _goes_equirect(_goes_file("goes18", t), W), -137.0),
         "Himawari-9": (lambda: _h09_equirect(t, W), 140.7),
     }
-    flags = np.zeros((W // 2, W), np.float32); used = []
+    flags = np.zeros((W // 2, W), np.float32); used = []; per = {}
     with ThreadPoolExecutor(5) as ex:
         futures = {name: ex.submit(fn) for name, (fn, _) in jobs.items()}
         for name, fut in futures.items():
@@ -240,6 +242,7 @@ def fetch_flags(t: datetime, W: int = 4096) -> tuple[np.ndarray, list[str]]:
             except Exception:
                 logger.exception("%s mask failed, skipped", name); continue
             sigma = 2.3 * W / 4096
-            flags = np.maximum(flags, gaussian_filter(np.nan_to_num(m), sigma, mode="wrap") * _view_fade(jobs[name][1], W))
+            per[name] = gaussian_filter(np.nan_to_num(m), sigma, mode="wrap") * _view_fade(jobs[name][1], W)
+            flags = np.maximum(flags, per[name])
             used.append(name)
-    return flags, used
+    return flags, used, per

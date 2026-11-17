@@ -3,3 +3,4 @@ pillow
 requests
 scipy
 h5py
+global-land-mask
