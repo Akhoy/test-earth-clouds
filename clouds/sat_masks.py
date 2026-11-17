@@ -212,20 +212,33 @@ def _clm_equirect(sector, t: datetime, W: int) -> np.ndarray:
     return out
 
 
-def _view_fade(lon0: float, W: int) -> np.ndarray:
+SEEN_DEG = 70.0          # a satellite "sees" a pixel within this angle of its sub-point (for clear-sky verdicts only)
+CLEAR_FLAG = 0.15
+
+
+def _view_angle(lon0: float, W: int) -> np.ndarray:
+    """Great-circle angle (deg) from the sub-satellite point (0 N, lon0) on the Americas-first canvas."""
     H_ = W // 2
     lat = np.radians(90 - (np.arange(H_) + 0.5) / H_ * 180)[:, None]
     lon = np.radians(-180 + (np.arange(W) + 0.5) / W * 360)[None, :]
-    ang = np.degrees(np.arccos(np.clip(np.cos(lat) * np.cos(lon - np.radians(lon0)), -1, 1)))
+    return np.degrees(np.arccos(np.clip(np.cos(lat) * np.cos(lon - np.radians(lon0)), -1, 1)))
+
+
+def _view_fade(lon0: float, W: int) -> np.ndarray:
+    ang = _view_angle(lon0, W)
     # Full trust within 45 deg of the sub-point, 0 at 62: beyond ~45 deg the masks over-flag (S Indian Ocean / south
     # of Australia came out 64% vs NASA 49% on 2026-11-16 with the old 55..70 fade).
     t = np.clip((ang - 45) / 17, 0, 1)
     return 1 - t * t * (3 - 2 * t)
 
 
-def fetch_flags(t: datetime, W: int = 4096) -> tuple[np.ndarray, list[str], dict]:
+def fetch_flags(t: datetime, W: int = 4096) -> tuple[np.ndarray, list[str], dict, np.ndarray]:
     """Max over the 5 masks of (cloud flag, softened ~2 px) x viewing-angle fade.  Americas-first.  A source that
-    fails is skipped and reported; returns (flags, names of sources used, {name: that source's faded flags})."""
+    fails is skipped and reported; returns (flags, names of sources used, {name: that source's faded flags}, clear).
+
+    clear: True where the satellite with the most direct view of the pixel (within SEEN_DEG) calls it clear.  Near the
+    limb the masks over-flag cloud (Himawari at ~60 deg flags half of clear Tibet and the Ganges plain at night), so
+    the nearest view decides."""
     jobs = {
         "Meteosat 0 CLM": (lambda: _clm_equirect(SECTORS[0], t, W), 0.0),
         "Meteosat 45.5E CLM": (lambda: _clm_equirect(SECTORS[1], t, W), 45.5),
@@ -234,6 +247,7 @@ def fetch_flags(t: datetime, W: int = 4096) -> tuple[np.ndarray, list[str], dict
         "Himawari-9": (lambda: _h09_equirect(t, W), 140.7),
     }
     flags = np.zeros((W // 2, W), np.float32); used = []; per = {}
+    best_ang = np.full((W // 2, W), SEEN_DEG, np.float32); best_flag = np.ones((W // 2, W), np.float32)
     with ThreadPoolExecutor(5) as ex:
         futures = {name: ex.submit(fn) for name, (fn, _) in jobs.items()}
         for name, fut in futures.items():
@@ -242,7 +256,11 @@ def fetch_flags(t: datetime, W: int = 4096) -> tuple[np.ndarray, list[str], dict
             except Exception:
                 logger.exception("%s mask failed, skipped", name); continue
             sigma = 2.3 * W / 4096
-            per[name] = gaussian_filter(np.nan_to_num(m), sigma, mode="wrap") * _view_fade(jobs[name][1], W)
+            soft = gaussian_filter(np.nan_to_num(m), sigma, mode="wrap")
+            per[name] = soft * _view_fade(jobs[name][1], W)
             flags = np.maximum(flags, per[name])
+            ang = _view_angle(jobs[name][1], W)
+            nearer = (ang < best_ang) & np.isfinite(m)
+            best_ang = np.where(nearer, ang, best_ang); best_flag = np.where(nearer, soft, best_flag)
             used.append(name)
-    return flags, used, per
+    return flags, used, per, best_flag < CLEAR_FLAG

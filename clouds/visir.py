@@ -102,6 +102,9 @@ HIDDEN_FINAL_GAMMA = 2.0
 THIN_TEXTURE_RANGE = 24.0
 SEA_HAZE = 0.0   # off (user, 2026-11-15). Tried 0.02, 0.04; 2026-11-15: 0.09 / 0.14 / 0.10 too much (grey, "slightly purple"); user: "a tiny bit"
 VISIBLE_GROUND_MARGIN = 0.08   # (test repo) visible counts as cloud only this far above the measured clear ground
+IR_GROUND_MARGIN = 10.0         # (test repo) IR counts as cloud only this far above the measured clear ground (gray levels)
+IR_GROUND_CELL = 32             # (test repo) ~2.8 deg cells: Himalaya/Tibet ground temperature changes fast with height
+IR_GROUND_FILL = 3              # (test repo) cells (~8 deg) a measured ground level may reach into cells with no clear pixel
 NASA_TONE_IN = [0.0, 0.008, 0.02, 0.047, 0.09, 0.133, 0.18, 0.231, 0.278, 0.329, 0.38, 0.443, 0.502, 0.565, 0.655,
                 0.765, 0.886, 0.988, 1.0]
 NASA_TONE_OUT = [0.06, 0.098, 0.133, 0.169, 0.208, 0.247, 0.29, 0.337, 0.384, 0.431, 0.482, 0.537, 0.6, 0.663, 0.722,
@@ -389,9 +392,10 @@ def _sea_weight(height: int, width: int) -> np.ndarray:
     return (1.0 - gaussian_filter(land, sigma=width / 2048, mode=("nearest", "wrap"))) * (1.0 - land)
 
 
-def _clear_ground_level(blue: np.ndarray, clear_px: np.ndarray, cell: int = 64) -> np.ndarray:
-    """(test repo) Median blue-channel brightness of clear pixels per ~5.6 deg cell (at 4096 wide), gaps filled from the
-    nearest measured cell, smoothed, upsampled.  0 where no clear pixel was ever measured nearby."""
+def _clear_ground_level(blue: np.ndarray, clear_px: np.ndarray, cell: int = 64, fill_cells: float | None = None) -> np.ndarray:
+    """(test repo) Median value (blue brightness or IR gray) of clear pixels per ~5.6 deg cell (at 4096 wide), gaps
+    filled from the nearest measured cell (only within fill_cells cells when given; farther gaps stay 0), smoothed,
+    upsampled.  0 where nothing was measured nearby."""
     from scipy.ndimage import distance_transform_edt, zoom
     h, w = blue.shape; gh, gw = h // cell, w // cell
     v = np.where(clear_px, blue, np.nan)[:gh * cell, :gw * cell].reshape(gh, cell, gw, cell).transpose(0, 2, 1, 3).reshape(gh, gw, -1)
@@ -401,17 +405,21 @@ def _clear_ground_level(blue: np.ndarray, clear_px: np.ndarray, cell: int = 64) 
     if np.isnan(lvl).all():
         return np.zeros_like(blue)
     hole = np.isnan(lvl)
-    lvl = lvl[tuple(distance_transform_edt(hole, return_distances=False, return_indices=True))]
+    dist, idx = distance_transform_edt(hole, return_distances=True, return_indices=True)
+    lvl = lvl[tuple(idx)]
+    if fill_cells is not None:
+        lvl = np.where(dist > fill_cells, 0.0, lvl)
     lvl = gaussian_filter(lvl, 1.0, mode=("nearest", "wrap"))
     return zoom(lvl, (h / gh, w / gw), order=1, mode="grid-wrap")
 
 
 def _compute_mask(
     vis: np.ndarray, ir: np.ndarray, dust: np.ndarray, snow_ice_fraction: np.ndarray, elevation: np.ndarray,
-    flags: np.ndarray | None = None, parts: dict | None = None,
+    flags: np.ndarray | None = None, parts: dict | None = None, clear_ground: np.ndarray | None = None,
 ) -> np.ndarray:
     """flags (cloud_pipeline): optional 0..1 map of 'a geostationary cloud mask says cloud' (CLM x2, GOES-E/W,
-    Himawari; viewing-angle faded, same canvas as vis).  When given it replaces the IR+dust thin layer."""
+    Himawari; viewing-angle faded, same canvas as vis).  When given it replaces the IR+dust thin layer.
+    clear_ground (test repo): optional bool map 'every satellite that sees this pixel calls it clear' (same canvas)."""
     blue = vis[..., 2].astype(np.float32) / 255.0
     vis_score = np.clip((blue - VISIBLE_CLEAR) / (VISIBLE_CLOUD - VISIBLE_CLEAR), 0, 1) ** VISIBLE_GAMMA
 
@@ -419,6 +427,14 @@ def _compute_mask(
     clear = _clear_sky_level(ir_gray) + IR_MARGIN
     detail = ir_gray - gaussian_filter(ir_gray, sigma=ir_gray.shape[1] / 700, mode=("nearest", "wrap"))
     ir_sharp = ir_gray + IR_DETAIL_GAIN * detail
+    if clear_ground is not None:
+        # (test repo) Cold clear ground is not cloud: at night the Tibetan plateau, the Himalaya and the Tarim basin
+        # read far colder than the regional 10th percentile above, and came out as a grey film.  Measure the IR level
+        # where the satellite masks say clear and count only what is colder than that as cloud.  Gaps are filled from
+        # measured cells at most IR_GROUND_FILL cells away; beyond that the old level stays, so a large overcast region
+        # is never raised by distant cold ground.
+        ground = _clear_ground_level(ir_sharp, clear_ground, cell=IR_GROUND_CELL, fill_cells=IR_GROUND_FILL)
+        clear = np.maximum(clear, np.where(ground > 0, np.minimum(ground + IR_GROUND_MARGIN, IR_CLOUD - 10), 0))
     ir_score = np.clip((ir_sharp - clear) / (IR_CLOUD - clear), 0, 1) ** IR_GAMMA
 
     daylight = _visible_weight(vis)
@@ -426,7 +442,7 @@ def _compute_mask(
         # (test repo) Bright ground is not cloud: sunlit desert (Sahara, Arabia) passes the fixed VISIBLE_CLEAR in the
         # blue channel and washed those regions out by day.  Measure each region's clear-ground brightness where the
         # satellite masks AND IR both say clear, and count only what is brighter than that as cloud.
-        clear_px = (flags < 0.15) & (ir_score < 0.08) & (daylight > 0.3)
+        clear_px = (clear_ground if clear_ground is not None else flags < 0.15) & (ir_score < 0.08) & (daylight > 0.3)
         threshold_vis = np.maximum(VISIBLE_CLEAR, _clear_ground_level(blue, clear_px) + VISIBLE_GROUND_MARGIN)
         vis_score = np.clip((blue - threshold_vis) / np.maximum(VISIBLE_CLOUD - threshold_vis, 0.15), 0, 1) ** VISIBLE_GAMMA
     if flags is None:

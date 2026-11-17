@@ -92,8 +92,9 @@ def main() -> int:
         R = np.load(a.raw, allow_pickle=True)
         t = datetime.fromisoformat(str(R["slot"])); L = {k: R[k] for k in ("vis", "ir", "dust", "elev", "snow")}
         per = R["per"].item(); used = list(per); flags = np.max(np.stack(list(per.values())), 0)
+        clear = R["clear"] if "clear" in R.files else None
         log.info("loaded inputs for %s from %s", t, a.raw)
-        return finish(a, t, L, flags, used, per)
+        return finish(a, t, L, flags, used, per, clear)
     if a.skip_if_current and not a.slot:
         import requests
         try:
@@ -113,17 +114,19 @@ def main() -> int:
     else:
         log.error("no usable EUMETSAT slot"); return 1
 
-    flags, used, per = fetch_flags(t, W)
+    flags, used, per, clear = fetch_flags(t, W)
     log.info("satellite masks used: %s", ", ".join(used) or "none")
     if a.raw:
-        np.savez(a.raw, slot=t.isoformat(), per=np.array(per, dtype=object), **L)
-    return finish(a, t, L, flags, used, per)
+        np.savez(a.raw, slot=t.isoformat(), per=np.array(per, dtype=object), clear=clear, **L)
+    return finish(a, t, L, flags, used, per, clear)
 
 
-def finish(a, t, L, flags, used, per) -> int:
+def finish(a, t, L, flags, used, per, clear=None) -> int:
     flags = np.roll(flags, W // 2, axis=1)                       # Americas-first -> visir's Greenwich-first
+    if clear is not None:
+        clear = np.roll(clear, W // 2, axis=1)
     parts = {}
-    mask = V._compute_mask(L["vis"], L["ir"], L["dust"], L["snow"], L["elev"], flags, parts)
+    mask = V._compute_mask(L["vis"], L["ir"], L["dust"], L["snow"], L["elev"], flags, parts, clear)
     mask = np.roll(mask, W // 2, axis=1)                         # -> Americas-first, as the tiles expect
 
     out = Path(a.out); vid = f"{t:%Y%m%dT%H}Z"
