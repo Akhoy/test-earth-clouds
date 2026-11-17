@@ -100,6 +100,8 @@ HIDDEN_FINAL_GAMMA = 2.0
 # cloud_pipeline tuning (2026-11-15): thin layer textured from IR (range in IR grey levels, depth 0..1); a 30% blend
 # with a 1 px blur (slightly less sharp); haze = 8% of the cloud field blurred ~12 px (at 4096 wide), added on top.
 THIN_TEXTURE_RANGE = 24.0
+THIN_TEXTURE_K = 2.0            # (test repo) texture range = K x local IR texture strength, clipped to MIN..RANGE
+THIN_TEXTURE_MIN = 3.0
 SEA_HAZE = 0.0   # off (user, 2026-11-15). Tried 0.02, 0.04; 2026-11-15: 0.09 / 0.14 / 0.10 too much (grey, "slightly purple"); user: "a tiny bit"
 VISIBLE_GROUND_MARGIN = 0.08   # (test repo) visible counts as cloud only this far above the measured clear ground
 IR_GROUND_MARGIN = 10.0         # (test repo) IR counts as cloud only this far above the measured clear ground (gray levels)
@@ -457,7 +459,14 @@ def _compute_mask(
         thin = THIN_LAYER_OPACITY * where * _ir_dust_score(ir_gray, dust)
     # (cloud_pipeline copy) The dust product is coarse, so the thin layer was a smooth texture-less fill that read as
     # blotches on the phone.  Give it the IR's own local structure: same cloud, real texture.
-    ir_tex = np.clip(0.5 + (ir_gray - gaussian_filter(ir_gray, sigma=ir_gray.shape[1] / 500, mode=("nearest", "wrap"))) / THIN_TEXTURE_RANGE, 0, 1)
+    # (test repo) Warm low cloud (night stratocumulus, polar sheets) barely varies in IR, so a fixed range left those
+    # sheets flat grey blotches.  Scale the range to the local texture strength instead: faint real structure is
+    # stretched (range down to THIN_TEXTURE_MIN), strong structure keeps THIN_TEXTURE_RANGE.  A 0.7 px blur first keeps
+    # 8-bit steps from turning into speckle.
+    w_ = ir_gray.shape[1]
+    d = gaussian_filter(ir_gray - gaussian_filter(ir_gray, sigma=w_ / 500, mode=("nearest", "wrap")), 0.7, mode=("nearest", "wrap"))
+    local = np.sqrt(gaussian_filter(d * d, sigma=w_ / 150, mode=("nearest", "wrap")))
+    ir_tex = np.clip(0.5 + d / np.clip(THIN_TEXTURE_K * local, THIN_TEXTURE_MIN, THIN_TEXTURE_RANGE), 0, 1)
     thin = thin * (1.0 - THIN_TEXTURE_DEPTH + THIN_TEXTURE_DEPTH * 2.0 * ir_tex).clip(0, 1)
     if parts is not None:                                       # (test repo) for the source map
         parts.update(vis=vis_score, ir=ir_score, day=daylight, thin=thin)
