@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
+from scipy.ndimage import gaussian_filter
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -62,9 +63,18 @@ def fetch_visir_layers(t: datetime) -> dict:
     return L
 
 
+def shade_of(gray: np.ndarray) -> np.ndarray:
+    """(test repo, 2026-11-18 option 5) matteason's edge shading: cloud colour = 0.5 + 0.5 * blurred mask (3 px at
+    4096), so thin edges and small cloud read grey and thick cores white.  Goes in the tiles' green channel; the
+    patched earth.frag paints day cloud with it instead of pure white."""
+    g = gaussian_filter(gray.astype(np.float32) / 255.0, 3.0 * gray.shape[1] / 4096, mode=("nearest", "wrap"))
+    return ((0.5 + 0.5 * g) * 255).round().astype(np.uint8)
+
+
 def write_tiles(gray: np.ndarray, dest: Path) -> int:
+    """R = B = cloud mask (alpha), G = shade_of(mask) (colour)."""
     dest.mkdir(parents=True, exist_ok=True)
-    faces = equirect_to_cubemap(np.stack([gray] * 3, -1), FACE_SIZE)
+    faces = equirect_to_cubemap(np.stack([gray, shade_of(gray), gray], -1), FACE_SIZE)
     n = 0
     for name, face in faces.items():
         idx = FACE_ORDER.index(name)
@@ -93,8 +103,9 @@ def main() -> int:
         t = datetime.fromisoformat(str(R["slot"])); L = {k: R[k] for k in ("vis", "ir", "dust", "elev", "snow")}
         per = R["per"].item(); used = list(per); flags = np.max(np.stack(list(per.values())), 0)
         clear = R["clear"] if "clear" in R.files else None
+        cloud = R["cloud"] if "cloud" in R.files else None
         log.info("loaded inputs for %s from %s", t, a.raw)
-        return finish(a, t, L, flags, used, per, clear)
+        return finish(a, t, L, flags, used, per, clear, cloud)
     if a.skip_if_current and not a.slot:
         import requests
         try:
@@ -114,19 +125,21 @@ def main() -> int:
     else:
         log.error("no usable EUMETSAT slot"); return 1
 
-    flags, used, per, clear = fetch_flags(t, W)
+    flags, used, per, clear, cloud = fetch_flags(t, W)
     log.info("satellite masks used: %s", ", ".join(used) or "none")
     if a.raw:
-        np.savez(a.raw, slot=t.isoformat(), per=np.array(per, dtype=object), clear=clear, **L)
-    return finish(a, t, L, flags, used, per, clear)
+        np.savez(a.raw, slot=t.isoformat(), per=np.array(per, dtype=object), clear=clear, cloud=cloud, **L)
+    return finish(a, t, L, flags, used, per, clear, cloud)
 
 
-def finish(a, t, L, flags, used, per, clear=None) -> int:
+def finish(a, t, L, flags, used, per, clear=None, cloud=None) -> int:
     flags = np.roll(flags, W // 2, axis=1)                       # Americas-first -> visir's Greenwich-first
     if clear is not None:
         clear = np.roll(clear, W // 2, axis=1)
+    if cloud is not None:
+        cloud = np.roll(cloud, W // 2, axis=1)
     parts = {}
-    mask = V._compute_mask(L["vis"], L["ir"], L["dust"], L["snow"], L["elev"], flags, parts, clear)
+    mask = V._compute_mask(L["vis"], L["ir"], L["dust"], L["snow"], L["elev"], flags, parts, clear, cloud)
     mask = np.roll(mask, W // 2, axis=1)                         # -> Americas-first, as the tiles expect
 
     out = Path(a.out); vid = f"{t:%Y%m%dT%H}Z"

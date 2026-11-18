@@ -214,6 +214,8 @@ def _clm_equirect(sector, t: datetime, W: int) -> np.ndarray:
 
 SEEN_DEG = 70.0          # a satellite "sees" a pixel within this angle of its sub-point (for clear-sky verdicts only)
 CLEAR_FLAG = 0.15
+RAW_TRUST_DEG = 58.0
+RAW_TRUST_RAMP = 16.0
 
 
 def _view_angle(lon0: float, W: int) -> np.ndarray:
@@ -232,13 +234,15 @@ def _view_fade(lon0: float, W: int) -> np.ndarray:
     return 1 - t * t * (3 - 2 * t)
 
 
-def fetch_flags(t: datetime, W: int = 4096) -> tuple[np.ndarray, list[str], dict, np.ndarray]:
+def fetch_flags(t: datetime, W: int = 4096) -> tuple[np.ndarray, list[str], dict, np.ndarray, np.ndarray]:
     """Max over the 5 masks of (cloud flag, softened ~2 px) x viewing-angle fade.  Americas-first.  A source that
     fails is skipped and reported; returns (flags, names of sources used, {name: that source's faded flags}, clear).
 
     clear: True where the satellite with the most direct view of the pixel (within SEEN_DEG) calls it clear.  Near the
     limb the masks over-flag cloud (Himawari at ~60 deg flags half of clear Tibet and the Ganges plain at night), so
-    the nearest view decides."""
+    the nearest view decides.
+
+    cloud: 0..1, 1 where that same nearest satellite's raw (unsoftened) mask says cloud, faded beyond RAW_TRUST_DEG."""
     jobs = {
         "Meteosat 0 CLM": (lambda: _clm_equirect(SECTORS[0], t, W), 0.0),
         "Meteosat 45.5E CLM": (lambda: _clm_equirect(SECTORS[1], t, W), 45.5),
@@ -248,6 +252,7 @@ def fetch_flags(t: datetime, W: int = 4096) -> tuple[np.ndarray, list[str], dict
     }
     flags = np.zeros((W // 2, W), np.float32); used = []; per = {}
     best_ang = np.full((W // 2, W), SEEN_DEG, np.float32); best_flag = np.ones((W // 2, W), np.float32)
+    best_raw = np.zeros((W // 2, W), np.float32)
     with ThreadPoolExecutor(5) as ex:
         futures = {name: ex.submit(fn) for name, (fn, _) in jobs.items()}
         for name, fut in futures.items():
@@ -262,5 +267,9 @@ def fetch_flags(t: datetime, W: int = 4096) -> tuple[np.ndarray, list[str], dict
             ang = _view_angle(jobs[name][1], W)
             nearer = (ang < best_ang) & np.isfinite(m)
             best_ang = np.where(nearer, ang, best_ang); best_flag = np.where(nearer, soft, best_flag)
+            best_raw = np.where(nearer, np.nan_to_num(m), best_raw)
             used.append(name)
-    return flags, used, per, best_flag < CLEAR_FLAG
+    # Raw verdict trusted up to RAW_TRUST_DEG from the nearest satellite, faded out over RAW_TRUST_RAMP: farther out
+    # the raw masks show straight-edged artifacts (Himawari at ~65 deg over Siberia cut off along ~109.5E).
+    t_ = np.clip((best_ang - RAW_TRUST_DEG) / RAW_TRUST_RAMP, 0, 1)
+    return flags, used, per, best_flag < CLEAR_FLAG, (best_raw >= 0.5) * (1 - t_ * t_ * (3 - 2 * t_))
