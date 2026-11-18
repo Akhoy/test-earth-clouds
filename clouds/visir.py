@@ -383,19 +383,14 @@ def _clear_sky_level(ir_gray: np.ndarray) -> np.ndarray:
     return np.clip(level, IR_CLEAR, IR_CLEAR_MAX)
 
 
-def _land(height: int, width: int) -> np.ndarray:
-    """1 on land, 0 on sea.  Greenwich-first canvas like the rest of this module (column 0 = lon 0)."""
+def _sea_weight(height: int, width: int) -> np.ndarray:
+    """(cloud_pipeline) 1 over open sea, exactly 0 on every land pixel; the feather (~2 px) ramps up offshore only, so
+    land is never touched.  Greenwich-first canvas like the rest of this module (column 0 = lon 0)."""
     from global_land_mask import globe
     lat = 90 - (np.arange(height) + 0.5) / height * 180
     lon = (np.arange(width) + 0.5) / width * 360
     lon = np.where(lon > 180, lon - 360, lon)
-    return globe.is_land(np.clip(lat, -89.9, 89.9)[:, None], lon[None, :]).astype(np.float32)
-
-
-def _sea_weight(height: int, width: int) -> np.ndarray:
-    """(cloud_pipeline) 1 over open sea, exactly 0 on every land pixel; the feather (~2 px) ramps up offshore only, so
-    land is never touched.  Greenwich-first canvas like the rest of this module (column 0 = lon 0)."""
-    land = _land(height, width)
+    land = globe.is_land(np.clip(lat, -89.9, 89.9)[:, None], lon[None, :]).astype(np.float32)
     return (1.0 - gaussian_filter(land, sigma=width / 2048, mode=("nearest", "wrap"))) * (1.0 - land)
 
 
@@ -423,7 +418,6 @@ def _clear_ground_level(blue: np.ndarray, clear_px: np.ndarray, cell: int = 64, 
 def _compute_mask(
     vis: np.ndarray, ir: np.ndarray, dust: np.ndarray, snow_ice_fraction: np.ndarray, elevation: np.ndarray,
     flags: np.ndarray | None = None, parts: dict | None = None, clear_ground: np.ndarray | None = None,
-    cloud_nearest: np.ndarray | None = None,
 ) -> np.ndarray:
     """flags (cloud_pipeline): optional 0..1 map of 'a geostationary cloud mask says cloud' (CLM x2, GOES-E/W,
     Himawari; viewing-angle faded, same canvas as vis).  When given it replaces the IR+dust thin layer.
@@ -463,14 +457,6 @@ def _compute_mask(
         cold = _hidden_land_weight(ir_gray, elevation) * (1.0 - daylight)
         where = np.maximum(cold, flags * ((1.0 - daylight) + daylight * lack))
         thin = THIN_LAYER_OPACITY * where * _ir_dust_score(ir_gray, dust)
-        # (test repo, 2026-11-17) Night cloud over cold land that the nearest-view satellite's mask calls cloud: rely on
-        # the mask, not the 0.6 cap.  IR barely sees these decks (Volga/Kazakhstan), so the capped layer drew them dim
-        # grey, and where IR saw part of the deck the two brightness levels made a patchwork.  Uses the nearest
-        # satellite's raw verdict (unsoftened, unfaded), so the deck follows that mask's own shape and gaps; the
-        # cold-land rule is not required (it left out a quarter of the flagged deck, e.g. north of Moscow).
-        deck = None
-        if cloud_nearest is not None:
-            deck = gaussian_filter(cloud_nearest * _land(*ir_gray.shape) * (1.0 - daylight), 0.7, mode=("nearest", "wrap"))
     # (cloud_pipeline copy) The dust product is coarse, so the thin layer was a smooth texture-less fill that read as
     # blotches on the phone.  Give it the IR's own local structure: same cloud, real texture.
     # (test repo) Warm low cloud (night stratocumulus, polar sheets) barely varies in IR, so a fixed range left those
@@ -482,8 +468,6 @@ def _compute_mask(
     local = np.sqrt(gaussian_filter(d * d, sigma=w_ / 150, mode=("nearest", "wrap")))
     ir_tex = np.clip(0.5 + d / np.clip(THIN_TEXTURE_K * local, THIN_TEXTURE_MIN, THIN_TEXTURE_RANGE), 0, 1)
     thin = thin * (1.0 - THIN_TEXTURE_DEPTH + THIN_TEXTURE_DEPTH * 2.0 * ir_tex).clip(0, 1)
-    if flags is not None and deck is not None:   # full matteason score, light texture only (0.7..1)
-        thin = np.maximum(thin, deck * _ir_dust_score(ir_gray, dust) * (0.7 + 0.6 * ir_tex).clip(0, 1))
     if parts is not None:                                       # (test repo) for the source map
         parts.update(vis=vis_score, ir=ir_score, day=daylight, thin=thin)
         if flags is not None:
