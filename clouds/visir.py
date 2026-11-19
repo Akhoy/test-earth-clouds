@@ -112,6 +112,27 @@ NASA_TONE_IN = [0.0, 0.008, 0.02, 0.047, 0.09, 0.133, 0.18, 0.231, 0.278, 0.329,
 NASA_TONE_OUT = [0.06, 0.098, 0.133, 0.169, 0.208, 0.247, 0.29, 0.337, 0.384, 0.431, 0.482, 0.537, 0.6, 0.663, 0.722,
                  0.78, 0.831, 0.886, 0.92]
 THIN_TEXTURE_DEPTH = 0.6
+# (test repo, 2026-11-19) CLM fill on land: where the nearest satellite's mask says cloud and IR draws little, fill at
+# the brightness of the IR cloud around it (FILL_REACH px at 4096), clipped to FILL_LO..FILL_HI, FILL_LEVEL where no IR
+# cloud is near.  Edge blur FILL_EDGE px; IR texture depth FILL_TEX.
+FILL_REACH = 24.0
+FILL_LEVEL = 0.78
+FILL_LO = 0.65
+FILL_HI = 0.92
+FILL_EDGE = 1.5
+FILL_TEX = 0.6
+SEA_THIN_LIFT = 0.8      # (test repo, 2026-11-19) gamma on the sea thin layer: reads whiter, not grey
+THIN_COARSE = 3          # (test repo, 2026-11-19) thin layer box-downsampled by this and bicubic-upsampled (Google-like softness)
+# (test repo, 2026-11-19) Final tone, quantile-matched to NASA VIIRS 18 Nov 2026 (as a grey mask) at |lat|<60: clear sky
+# goes to black and cloud to white, in NASA's proportions.  Applied to the finished mask (after the polar fade).
+FINAL_TONE_IN = [0.0588, 0.0627, 0.0667, 0.0745, 0.0824, 0.0941, 0.1059, 0.1177, 0.1373, 0.153, 0.1686, 0.1882, 0.2079,
+                 0.2314, 0.2549, 0.2824, 0.3098, 0.3373, 0.3686, 0.3961, 0.4235, 0.4549, 0.4824, 0.5098, 0.5334, 0.5687,
+                 0.6039, 0.6353, 0.6667, 0.6902, 0.7138, 0.7294, 0.753, 0.7726, 0.7922, 0.8118, 0.8353, 0.8667, 0.8902,
+                 0.9177, 0.9178]
+FINAL_TONE_OUT = [0.0, 0.0, 0.0241, 0.0432, 0.0602, 0.0768, 0.0932, 0.11, 0.1286, 0.1475, 0.1678, 0.189, 0.2126, 0.2376,
+                  0.265, 0.2941, 0.3253, 0.3585, 0.3936, 0.4289, 0.4633, 0.5011, 0.5381, 0.5747, 0.6101, 0.6424, 0.6719,
+                  0.7001, 0.7277, 0.7541, 0.7783, 0.8003, 0.8203, 0.8392, 0.8561, 0.8725, 0.8903, 0.908, 0.9279, 0.9502,
+                  1.0]
 SOFTEN_BLEND = 0.3
 HAZE_OPACITY = 0.08
 HIDDEN_REGION_LEVEL = 86.0
@@ -463,14 +484,6 @@ def _compute_mask(
         cold = _hidden_land_weight(ir_gray, elevation) * (1.0 - daylight)
         where = np.maximum(cold, flags * ((1.0 - daylight) + daylight * lack))
         thin = THIN_LAYER_OPACITY * where * _ir_dust_score(ir_gray, dust)
-        # (test repo, 2026-11-17) Night cloud over cold land that the nearest-view satellite's mask calls cloud: rely on
-        # the mask, not the 0.6 cap.  IR barely sees these decks (Volga/Kazakhstan), so the capped layer drew them dim
-        # grey, and where IR saw part of the deck the two brightness levels made a patchwork.  Uses the nearest
-        # satellite's raw verdict (unsoftened, unfaded), so the deck follows that mask's own shape and gaps; the
-        # cold-land rule is not required (it left out a quarter of the flagged deck, e.g. north of Moscow).
-        deck = None
-        if cloud_nearest is not None:
-            deck = gaussian_filter(cloud_nearest * _land(*ir_gray.shape) * (1.0 - daylight), 0.7, mode=("nearest", "wrap"))
     # (cloud_pipeline copy) The dust product is coarse, so the thin layer was a smooth texture-less fill that read as
     # blotches on the phone.  Give it the IR's own local structure: same cloud, real texture.
     # (test repo) Warm low cloud (night stratocumulus, polar sheets) barely varies in IR, so a fixed range left those
@@ -482,8 +495,28 @@ def _compute_mask(
     local = np.sqrt(gaussian_filter(d * d, sigma=w_ / 150, mode=("nearest", "wrap")))
     ir_tex = np.clip(0.5 + d / np.clip(THIN_TEXTURE_K * local, THIN_TEXTURE_MIN, THIN_TEXTURE_RANGE), 0, 1)
     thin = thin * (1.0 - THIN_TEXTURE_DEPTH + THIN_TEXTURE_DEPTH * 2.0 * ir_tex).clip(0, 1)
-    if flags is not None and deck is not None:   # full matteason score, light texture only (0.7..1)
-        thin = np.maximum(thin, deck * _ir_dust_score(ir_gray, dust) * (0.7 + 0.6 * ir_tex).clip(0, 1))
+    if flags is not None and cloud_nearest is not None:
+        # (test repo, 2026-11-19) Layered fill replaces the night deck on land: IR first; where the nearest satellite's
+        # mask says cloud and IR draws little, fill at the brightness of the IR cloud around it (the flat dust-score
+        # grey read as "disease" spots), with IR texture and soft rounded edges; by day only where visible shows no
+        # cloud nearby.  On land this fill replaces the old flat thin layer (cold-land rule kept); sea keeps it.
+        sm = lambda x, s_: gaussian_filter(x, s_ * w_ / 4096, mode=("nearest", "wrap"))
+        thick = (ir_score > 0.5).astype(np.float32)
+        nb = sm(thick, FILL_REACH)
+        level = np.where(nb > 0.02, sm(ir_score * thick, FILL_REACH) / np.maximum(nb, 1e-3), FILL_LEVEL)
+        level = np.clip(level, FILL_LO, FILL_HI)
+        v = _smoothstep(np.clip((sm(cloud_nearest.astype(np.float32), FILL_EDGE) - 0.15) / 0.6, 0, 1))
+        fill = v * level * (1 - FILL_TEX + FILL_TEX * 2 * ir_tex).clip(0, 1)
+        landw = gaussian_filter(_land(*ir_gray.shape), 1.5 * w_ / 4096, mode=("nearest", "wrap"))
+        fill = fill * ((1.0 - daylight) + daylight * lack) * landw
+        thin = np.maximum(thin * np.maximum(cold, 1.0 - landw), fill)
+        # Sea thin layer lifted toward white (gamma keeps its texture).
+        thin = thin + (1.0 - landw) * (thin ** SEA_THIN_LIFT - thin)
+    # (test repo, 2026-11-19) Google-like softness for the thin layer only: box-downsample, bicubic-upsample (rounded
+    # blobs, no hard flag edges or speckle).  IR stays full resolution and wins on top via max().
+    hh, ww = thin.shape
+    thin = np.asarray(Image.fromarray(thin.astype(np.float32), mode="F").resize((ww // THIN_COARSE, hh // THIN_COARSE), Image.BOX)
+                      .resize((ww, hh), Image.BICUBIC), np.float32).clip(0, 1)
     if parts is not None:                                       # (test repo) for the source map
         parts.update(vis=vis_score, ir=ir_score, day=daylight, thin=thin)
         if flags is not None:
@@ -512,6 +545,7 @@ def _compute_mask(
     if SEA_HAZE > 0:
         final = final + SEA_HAZE * _sea_weight(*final.shape) * (1.0 - final)
     final = final * _polar_fade(ir_gray)
+    final = np.interp(final, FINAL_TONE_IN, FINAL_TONE_OUT)
     return (final * 255).astype(np.uint8)
 
 
