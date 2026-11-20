@@ -138,7 +138,7 @@ def compute_mask(t: datetime, L: dict, per: dict, clear: np.ndarray, cloud: np.n
 
 # ---------------------------------------------------------------- source map (published as _debug_sources.png)
 SOURCE_NAMES = ["v5 visible (EUMETSAT)", "v5 IR", "v5 thin: cold-land rule", "v5 thin: GOES-East mask",
-                "v5 thin: GOES-West mask", "v5 thin: Himawari mask", "matt IR+dust (no visible)", "glint spot -> matt",
+                "v5 thin: GOES-West mask", "v5 thin: Himawari mask", "C18 matt IR+dust (no visible)", "glint spot -> matt",
                 "polar no-data fill"]
 SOURCE_COLOURS = np.array([[255, 220, 0], [0, 160, 255], [200, 200, 200], [255, 40, 40], [255, 80, 220], [0, 230, 60],
                            [170, 60, 255], [255, 255, 255], [255, 140, 0]], np.float32)
@@ -174,16 +174,16 @@ def _font(size: int):
     return ImageFont.load_default(size=size)
 
 
-NASA_LAYER = "VIIRS_NOAA20_CorrectedReflectance_TrueColor"
+NASA_NOON_SUN_MIN = 10.5   # deg: NASA VIIRS true colour has no daytime image where the noon sun stays this low
 
 
-def nasa_viirs(t: datetime):
-    """NASA VIIRS (NOAA-20) true colour for the slot's UTC day, 4096x2048 Americas-first, and its no-data mask
-    (max channel < 5: no swath there yet / between swaths / polar night).  Published images are clipped to it."""
-    rgb = V._get_wms_image(V.GIBS_WMS_URL, dict(SERVICE="WMS", REQUEST="GetMap", VERSION="1.3.0", LAYERS=NASA_LAYER,
-                                                CRS="EPSG:4326", BBOX="-90,-180,90,180", WIDTH=W, HEIGHT=H,
-                                                FORMAT="image/jpeg", TIME=f"{t:%Y-%m-%d}"))
-    return rgb, rgb.max(-1) < 5
+def nasa_nodata(t: datetime) -> np.ndarray:
+    """Where NASA's VIIRS true-colour day has no data: the polar-night cap, rows whose noon sun elevation is below
+    NASA_NOON_SUN_MIN on the slot's day (Americas-first 4096x2048, NASA's grid).  Fitted to NASA's real no-data area:
+    99.8% agreement on 18 Nov (local nasa18.jpg) and on 20 Nov (main feed's _debug_cloud_mask.png).  No download."""
+    dec, _ = _sun(t)
+    lat = 90 - (np.arange(H) + 0.5) / H * 180
+    return np.repeat((90 - np.abs(lat - np.degrees(dec)) < NASA_NOON_SUN_MIN)[:, None], W, 1)
 
 
 def source_map(sources: dict, t: datetime, nodata: np.ndarray | None = None):
@@ -209,8 +209,7 @@ def source_map(sources: dict, t: datetime, nodata: np.ndarray | None = None):
         x, y = 20 + (i % 3) * 680, 52 + (i // 3) * 50
         d.rectangle([x, y, x + 40, y + 36], fill=c, outline=(255, 255, 255))
         d.text((x + 52, y + 4), f"{n}  {pct:.1f}%", fill=c if c != (45, 45, 45) else (190, 190, 190), font=f26)
-    d.text((20, 290), "black = no NASA VIIRS data for this day (excluded);  % = share of the area NASA covers;  "
-           "brighter = denser cloud" if nodata is not None else "% = share of the whole map (NASA VIIRS not available); "
-           "brighter = denser cloud", fill=(170, 170, 170), font=f18)
+    d.text((20, 290), "black = no NASA data (excluded);  % = share of the area NASA covers" if nodata is not None
+           else "% = share of the whole map", fill=(170, 170, 170), font=f18)
     out = Image.new("RGB", (2048, 1344)); out.paste(img, (0, 0)); out.paste(leg, (0, 1024))
     return out
