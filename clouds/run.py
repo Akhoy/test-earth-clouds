@@ -114,7 +114,7 @@ def main() -> int:
         except Exception:
             cur = None
         want = f"{latest_slot(datetime.now(timezone.utc)):%Y%m%dT%H}Z"
-        if cur == want:
+        if cur and cur.split("_")[0] == want:                  # version = <slot>_<build time>
             log.info("published root.json already at %s: nothing to do", want); return 0
     first = datetime.strptime(a.slot, "%Y%m%dT%H").replace(tzinfo=timezone.utc) if a.slot else latest_slot(datetime.now(timezone.utc))
     for t in (first, first - timedelta(hours=3)):
@@ -140,7 +140,9 @@ def finish(a, t, L, flags, used, per, clear=None, cloud=None) -> int:
     sources = {}
     mask = X1.compute_mask(t, L, per, clear, cloud, sources)     # Americas-first, as the tiles expect
 
-    out = Path(a.out); vid = f"{t:%Y%m%dT%H}Z"
+    # (2026-11-20) slot + build time to the second, so every build (incl. a rebuild of the same slot) gets a new
+    # baseUrl in root.json and the phone downloads it
+    out = Path(a.out); vid = f"{t:%Y%m%dT%H}Z_{datetime.now(timezone.utc):%Y%m%dT%H%M%S}Z"
     vdir = out / "versions" / vid
     n = write_tiles(mask, vdir)
     nodata = X1.nasa_nodata(t)                                   # debug images on NASA's grid and coverage
