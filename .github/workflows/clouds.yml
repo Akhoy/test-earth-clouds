@@ -2,10 +2,10 @@ name: Build and publish cloud mask (every 3 hours)
 
 on:
   schedule:
-    # Hourly attempts: GitHub's scheduler is best-effort and fired only 4 of the first ~16 three-hourly triggers
+    # Attempts every 15 min (2026-11-20; was hourly): GitHub's scheduler is best-effort and fired only 4 of the first ~16 three-hourly triggers
     # (2026-11-15/16).  Each run builds the latest complete 3-hour slot (~1.5 h after the scan) and exits early when
     # the published root.json already points at it, so the extra attempts cost ~30 s each.
-    - cron: "35 * * * *"
+    - cron: "*/15 * * * *"
   workflow_dispatch:
     inputs:
       slot:
