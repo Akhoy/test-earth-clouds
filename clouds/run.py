@@ -145,7 +145,15 @@ def finish(a, t, L, flags, used, per, clear=None, cloud=None) -> int:
     n = write_tiles(mask, vdir)
     Image.fromarray(mask).save(vdir / "_debug_cloud_mask.png")
     debug.land_debug(mask).save(vdir / "_debug_cloud_mask_land.png")
-    X1.source_map(sources, t).save(vdir / "_debug_sources.jpg", quality=90)
+    try:                                                         # clip the published images to NASA VIIRS coverage
+        nasa_rgb, nodata = X1.nasa_viirs(t)
+        Image.fromarray(np.where(nodata, 0, mask).astype(np.uint8)).save(vdir / "_debug_cloud_mask_nasaclip.png")
+        Image.fromarray(nasa_rgb).save(vdir / "_debug_nasa_viirs.jpg", quality=88)
+        log.info("NASA VIIRS %s: %.1f%% of the map has data", f"{t:%Y-%m-%d}", 100 * (1 - nodata.mean()))
+    except Exception as exc:
+        log.warning("NASA VIIRS not available, source map not clipped: %r", exc); nodata = None
+    X1.source_map(sources, t, nodata).save(vdir / "_debug_sources_nasaclip.jpg" if nodata is not None
+                                            else vdir / "_debug_sources.jpg", quality=90)
     debug.write_urls(vdir / "_sources.txt")
     (vdir / "_info.json").write_text(json.dumps({"slot": t.isoformat(), "built": datetime.now(timezone.utc).isoformat(),
                                                  "masks": used, "mean": round(float(mask.mean()) / 255, 4)}, indent=1))

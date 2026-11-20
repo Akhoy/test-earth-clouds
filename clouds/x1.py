@@ -174,26 +174,43 @@ def _font(size: int):
     return ImageFont.load_default(size=size)
 
 
-def source_map(sources: dict, t: datetime):
-    """Colour per source, brighter where the cloud is denser; legend with each source's share of the map."""
+NASA_LAYER = "VIIRS_NOAA20_CorrectedReflectance_TrueColor"
+
+
+def nasa_viirs(t: datetime):
+    """NASA VIIRS (NOAA-20) true colour for the slot's UTC day, 4096x2048 Americas-first, and its no-data mask
+    (max channel < 5: no swath there yet / between swaths / polar night).  Published images are clipped to it."""
+    rgb = V._get_wms_image(V.GIBS_WMS_URL, dict(SERVICE="WMS", REQUEST="GetMap", VERSION="1.3.0", LAYERS=NASA_LAYER,
+                                                CRS="EPSG:4326", BBOX="-90,-180,90,180", WIDTH=W, HEIGHT=H,
+                                                FORMAT="image/jpeg", TIME=f"{t:%Y-%m-%d}"))
+    return rgb, rgb.max(-1) < 5
+
+
+def source_map(sources: dict, t: datetime, nodata: np.ndarray | None = None):
+    """Colour per source, brighter where the cloud is denser; legend with each source's share.  nodata: NASA's no-data
+    mask; those pixels are black and left out of the shares."""
     from PIL import Image, ImageDraw
     cls, final = sources["cls"], sources["final"]
     img = np.full(cls.shape + (3,), 45.0, np.float32)
     for i, c in enumerate(SOURCE_COLOURS):
         m = cls == i
         img[m] = c * (0.55 + 0.45 * final[m, None])
+    inside = np.ones(cls.shape, bool) if nodata is None else ~nodata
+    img[~inside] = 0
     img = Image.fromarray(img.clip(0, 255).astype(np.uint8)).resize((2048, 1024))
     f26, f18 = _font(26), _font(18)
     leg = Image.new("RGB", (2048, 320), (0, 0, 0)); d = ImageDraw.Draw(leg)
     dec, sl = _sun(t)
     d.text((20, 8), f"X1, {t:%d %b %Y %H:%M}Z  (subsolar {np.degrees(sl):.0f}E, dec {np.degrees(dec):.1f})",
            fill=(255, 255, 255), font=f26)
-    items = [(n, tuple(int(v) for v in c), np.mean(cls == i) * 100) for i, (n, c) in enumerate(zip(SOURCE_NAMES, SOURCE_COLOURS))]
-    items.append(("clear (mask < 0.15)", (45, 45, 45), np.mean(cls == -1) * 100))
+    items = [(n, tuple(int(v) for v in c), np.mean(cls[inside] == i) * 100) for i, (n, c) in enumerate(zip(SOURCE_NAMES, SOURCE_COLOURS))]
+    items.append(("clear (mask < 0.15)", (45, 45, 45), np.mean(cls[inside] == -1) * 100))
     for i, (n, c, pct) in enumerate(items):
         x, y = 20 + (i % 3) * 680, 52 + (i // 3) * 50
         d.rectangle([x, y, x + 40, y + 36], fill=c, outline=(255, 255, 255))
         d.text((x + 52, y + 4), f"{n}  {pct:.1f}%", fill=c if c != (45, 45, 45) else (190, 190, 190), font=f26)
-    d.text((20, 290), "% = share of the whole map; brighter = denser cloud", fill=(170, 170, 170), font=f18)
+    d.text((20, 290), "black = no NASA VIIRS data for this day (excluded);  % = share of the area NASA covers;  "
+           "brighter = denser cloud" if nodata is not None else "% = share of the whole map (NASA VIIRS not available); "
+           "brighter = denser cloud", fill=(170, 170, 170), font=f18)
     out = Image.new("RGB", (2048, 1344)); out.paste(img, (0, 0)); out.paste(leg, (0, 1024))
     return out
