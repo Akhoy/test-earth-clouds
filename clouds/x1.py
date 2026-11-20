@@ -25,6 +25,7 @@ import visir_v5 as V5             # frozen v5 checkpoint (2026-11-15)
 
 H, W = 2048, 4096
 WRAP = ("nearest", "wrap")
+CLOUD_SCALE = 0.85    # (2026-11-20) user: clouds too bright on the phone; thickest cloud now ~76% white, not 90%
 SEA_MASK = Path(__file__).parent.parent / "assets" / "sea_mask_4096x2048.npz"   # Americas-first, 1 = sea
 
 
@@ -127,4 +128,4 @@ def compute_mask(t: datetime, L: dict, per: dict, clear: np.ndarray, cloud: np.n
     fill = np.where(np.isnan(fill), final[has].mean(), fill)
     keep = gf(has.astype(np.float32), 8.0, mode=WRAP) * has
     final = np.clip(keep * final + (1 - keep) * fill, 0, 1)
-    return (final * 255).round().astype(np.uint8)
+    return (final * CLOUD_SCALE * 255).round().astype(np.uint8)
