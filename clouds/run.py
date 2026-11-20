@@ -3,7 +3,7 @@
   1. slot = the latest 00/03/.../21Z scan at least ~1.5 h old (EUMETSAT and NOAA need that long to publish);
      if EUMETSAT does not have it yet, the slot before.
   2. the 5 satellite cloud masks for that slot (sat_masks.py) and EUMETSAT's IR mosaic, natural-colour visible and
-     dust for the SAME slot (visir.py); visir builds the grey mask, the masks only place its thin cloud layer.
+     dust for the SAME slot (visir.py); x1.py builds the grey mask (v5 by day, matteason IR + dust elsewhere).
   3. 96 DDS tiles (6 cube faces x 4x4) + root.json, in the app's cloudMap format, into OUT/.
 
 Usage: python clouds/run.py --out site --base-url https://<owner>.github.io/<repo>"""
@@ -23,6 +23,7 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).parent))
 import visir as V                                              # noqa: E402
+import x1 as X1                                                # noqa: E402
 from sat_masks import fetch_flags                              # noqa: E402
 from cubemap import equirect_to_cubemap, FACE_ORDER            # noqa: E402
 from dxt1 import encode_tile_to_dds                            # noqa: E402
@@ -133,21 +134,16 @@ def main() -> int:
 
 
 def finish(a, t, L, flags, used, per, clear=None, cloud=None) -> int:
-    flags = np.roll(flags, W // 2, axis=1)                       # Americas-first -> visir's Greenwich-first
-    if clear is not None:
-        clear = np.roll(clear, W // 2, axis=1)
-    if cloud is not None:
-        cloud = np.roll(cloud, W // 2, axis=1)
-    parts = {}
-    mask = V._compute_mask(L["vis"], L["ir"], L["dust"], L["snow"], L["elev"], flags, parts, clear, cloud)
-    mask = np.roll(mask, W // 2, axis=1)                         # -> Americas-first, as the tiles expect
+    # (2026-11-20) X1 look: v5 by day + matteason IR/dust elsewhere (x1.py).  per/clear/cloud stay Americas-first.
+    if clear is None or cloud is None:
+        raise RuntimeError("X1 needs the satellites' clear/cloud verdicts (re-fetch the raw inputs)")
+    mask = X1.compute_mask(t, L, per, clear, cloud)              # Americas-first, as the tiles expect
 
     out = Path(a.out); vid = f"{t:%Y%m%dT%H}Z"
     vdir = out / "versions" / vid
     n = write_tiles(mask, vdir)
     Image.fromarray(mask).save(vdir / "_debug_cloud_mask.png")
     debug.land_debug(mask).save(vdir / "_debug_cloud_mask_land.png")
-    debug.source_map(parts, {k: np.roll(v, W // 2, 1) for k, v in per.items()}, mask).save(vdir / "_debug_sources.png")
     debug.write_urls(vdir / "_sources.txt")
     (vdir / "_info.json").write_text(json.dumps({"slot": t.isoformat(), "built": datetime.now(timezone.utc).isoformat(),
                                                  "masks": used, "mean": round(float(mask.mean()) / 255, 4)}, indent=1))
