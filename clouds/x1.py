@@ -49,9 +49,11 @@ def _sun(t: datetime):
     return dec, np.radians(((-15 * (hour - 12) - eot / 4) + 180) % 360 - 180)
 
 
-def compute_mask(t: datetime, L: dict, per: dict, clear: np.ndarray, cloud: np.ndarray) -> np.ndarray:
+def compute_mask(t: datetime, L: dict, per: dict, clear: np.ndarray, cloud: np.ndarray,
+                 sources: dict | None = None) -> np.ndarray:
     """L: EUMETSAT vis/ir/dust/snow/elev (Greenwich-first, run.fetch_visir_layers); per, clear, cloud: sat_masks.fetch_flags
-    output (Americas-first).  Returns the uint8 mask, Americas-first (as the tiles expect)."""
+    output (Americas-first).  Returns the uint8 mask, Americas-first (as the tiles expect).  sources: filled with
+    what source_map() needs."""
     vis, ir, dust_u8, snow, elev_g = L["vis"], L["ir"], L["dust"], L["snow"], L["elev"]
     clear_v, cloud_v = clear.astype(np.float32), cloud.astype(np.float32)
     lat = 90 - (np.arange(H) + 0.5) / H * 180
@@ -107,10 +109,11 @@ def compute_mask(t: datetime, L: dict, per: dict, clear: np.ndarray, cloud: np.n
     # ---- v5 by day (thin layer placed by GOES-E/W + Himawari only), glint spots taken out of its visible footprint
     flags = _A(np.max([np.nan_to_num(np.asarray(per[k], np.float32)) for k in per if not k.startswith("Meteosat")]
                       or [np.zeros((H, W), np.float32)], 0))
+    v5parts = {}
     vw = V5._visible_weight
     V5._visible_weight = lambda x: vw(x) * _A(glint)
     try:
-        m5 = _A(V5._compute_mask(vis, ir, dust_u8, snow, elev_g, flags).astype(np.float32) / 255)
+        m5 = _A(V5._compute_mask(vis, ir, dust_u8, snow, elev_g, flags, _A(clear_v > 0.5), v5parts).astype(np.float32) / 255)
         dl = _A(V5._visible_weight(vis))
     finally:
         V5._visible_weight = vw
@@ -128,4 +131,69 @@ def compute_mask(t: datetime, L: dict, per: dict, clear: np.ndarray, cloud: np.n
     fill = np.where(np.isnan(fill), final[has].mean(), fill)
     keep = gf(has.astype(np.float32), 8.0, mode=WRAP) * has
     final = np.clip(keep * final + (1 - keep) * fill, 0, 1)
+    if sources is not None:
+        sources.update(_classify(final, dl, keep, glint, _A(vw(vis)), v5parts, per))
     return (final * CLOUD_SCALE * 255).round().astype(np.uint8)
+
+
+# ---------------------------------------------------------------- source map (published as _debug_sources.png)
+SOURCE_NAMES = ["v5 visible (EUMETSAT)", "v5 IR", "v5 thin: cold-land rule", "v5 thin: GOES-East mask",
+                "v5 thin: GOES-West mask", "v5 thin: Himawari mask", "matt IR+dust (no visible)", "glint spot -> matt",
+                "polar no-data fill"]
+SOURCE_COLOURS = np.array([[255, 220, 0], [0, 160, 255], [200, 200, 200], [255, 40, 40], [255, 80, 220], [0, 230, 60],
+                           [170, 60, 255], [255, 255, 255], [255, 140, 0]], np.float32)
+
+
+def _classify(final, dl, keep, glint, vis_footprint, p, per) -> dict:
+    """Which source drew each cloudy pixel (Americas-first); -1 = clear (final < 0.15)."""
+    vis_w = _A(p["day"] * p["vis"] > np.maximum(p["ir"], p["thin"]))
+    thin_w = _A(p["thin"] > p["ir"]) & ~vis_w
+    per_g = [_A(np.nan_to_num(np.asarray(per[k], np.float32))) for k in ("GOES-East", "GOES-West", "Himawari-9")
+             if k in per]
+    who = _A(np.argmax(np.stack([p["coldl"]] + per_g), 0))
+    cloudy = final > 0.15
+    cls = np.full(final.shape, -1, np.int8)
+    pv5 = dl > 0.5
+    cls[pv5 & cloudy] = 1
+    sel = pv5 & cloudy & thin_w
+    cls[sel] = 2 + who[sel]
+    cls[pv5 & cloudy & vis_w] = 0
+    cls[~pv5 & cloudy] = 6
+    cls[(vis_footprint > 0.5) & (glint < 0.5) & cloudy] = 7
+    cls[(keep < 0.5) & cloudy] = 8
+    return {"cls": cls, "final": final}
+
+
+def _font(size: int):
+    from PIL import ImageFont
+    for f in ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/System/Library/Fonts/Helvetica.ttc"):
+        try:
+            return ImageFont.truetype(f, size)
+        except OSError:
+            pass
+    return ImageFont.load_default(size=size)
+
+
+def source_map(sources: dict, t: datetime):
+    """Colour per source, brighter where the cloud is denser; legend with each source's share of the map."""
+    from PIL import Image, ImageDraw
+    cls, final = sources["cls"], sources["final"]
+    img = np.full(cls.shape + (3,), 45.0, np.float32)
+    for i, c in enumerate(SOURCE_COLOURS):
+        m = cls == i
+        img[m] = c * (0.55 + 0.45 * final[m, None])
+    img = Image.fromarray(img.clip(0, 255).astype(np.uint8)).resize((2048, 1024))
+    f26, f18 = _font(26), _font(18)
+    leg = Image.new("RGB", (2048, 320), (0, 0, 0)); d = ImageDraw.Draw(leg)
+    dec, sl = _sun(t)
+    d.text((20, 8), f"X1, {t:%d %b %Y %H:%M}Z  (subsolar {np.degrees(sl):.0f}E, dec {np.degrees(dec):.1f})",
+           fill=(255, 255, 255), font=f26)
+    items = [(n, tuple(int(v) for v in c), np.mean(cls == i) * 100) for i, (n, c) in enumerate(zip(SOURCE_NAMES, SOURCE_COLOURS))]
+    items.append(("clear (mask < 0.15)", (45, 45, 45), np.mean(cls == -1) * 100))
+    for i, (n, c, pct) in enumerate(items):
+        x, y = 20 + (i % 3) * 680, 52 + (i // 3) * 50
+        d.rectangle([x, y, x + 40, y + 36], fill=c, outline=(255, 255, 255))
+        d.text((x + 52, y + 4), f"{n}  {pct:.1f}%", fill=c if c != (45, 45, 45) else (190, 190, 190), font=f26)
+    d.text((20, 290), "% = share of the whole map; brighter = denser cloud", fill=(170, 170, 170), font=f18)
+    out = Image.new("RGB", (2048, 1344)); out.paste(img, (0, 0)); out.paste(leg, (0, 1024))
+    return out

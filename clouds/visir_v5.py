@@ -353,7 +353,7 @@ def _clear_sky_level(ir_gray: np.ndarray) -> np.ndarray:
 
 def _compute_mask(
     vis: np.ndarray, ir: np.ndarray, dust: np.ndarray, snow_ice_fraction: np.ndarray, elevation: np.ndarray,
-    flags: np.ndarray | None = None,
+    flags: np.ndarray | None = None, clear_ground: np.ndarray | None = None, parts: dict | None = None,
 ) -> np.ndarray:
     """flags (cloud_pipeline): optional 0..1 map of 'a geostationary cloud mask says cloud' (CLM x2, GOES-E/W,
     Himawari; viewing-angle faded, same canvas as vis).  When given it replaces the IR+dust thin layer."""
@@ -367,6 +367,15 @@ def _compute_mask(
     ir_score = np.clip((ir_sharp - clear) / (IR_CLOUD - clear), 0, 1) ** IR_GAMMA
 
     daylight = _visible_weight(vis)
+    if clear_ground is not None:
+        # (X1, 2026-11-20) Bright ground is not cloud: sunlit desert (Sahara, Arabia, Iran) passed the fixed
+        # VISIBLE_CLEAR in the blue channel and washed those regions out grey by day.  Same rule as the N1 visir.py:
+        # measure each region's clear-ground brightness where the satellite masks AND IR say clear, and count only
+        # what is brighter than that as cloud.
+        from visir import _clear_ground_level, VISIBLE_GROUND_MARGIN
+        clear_px = clear_ground & (ir_score < 0.08) & (daylight > 0.3)
+        threshold_vis = np.maximum(VISIBLE_CLEAR, _clear_ground_level(blue, clear_px) + VISIBLE_GROUND_MARGIN)
+        vis_score = np.clip((blue - threshold_vis) / np.maximum(VISIBLE_CLOUD - threshold_vis, 0.15), 0, 1) ** VISIBLE_GAMMA
     if flags is None:
         thin = THIN_LAYER_OPACITY * _hidden_land_weight(ir_gray, elevation) * (1.0 - daylight) * _ir_dust_score(ir_gray, dust)
     else:
@@ -380,6 +389,9 @@ def _compute_mask(
     # blotches on the phone.  Give it the IR's own local structure: same cloud, real texture.
     ir_tex = np.clip(0.5 + (ir_gray - gaussian_filter(ir_gray, sigma=ir_gray.shape[1] / 500, mode=("nearest", "wrap"))) / THIN_TEXTURE_RANGE, 0, 1)
     thin = thin * (1.0 - THIN_TEXTURE_DEPTH + THIN_TEXTURE_DEPTH * 2.0 * ir_tex).clip(0, 1)
+    if parts is not None:                     # (X1) for the published source map
+        parts.update(vis=vis_score, ir=ir_score, thin=thin, day=daylight,
+                     coldl=_hidden_land_weight(ir_gray, elevation) * (1.0 - daylight))
     ir_score = np.maximum(ir_score, thin)
 
     # Inside the daylit footprint the brighter of the two wins; the weight

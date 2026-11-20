@@ -137,13 +137,15 @@ def finish(a, t, L, flags, used, per, clear=None, cloud=None) -> int:
     # (2026-11-20) X1 look: v5 by day + matteason IR/dust elsewhere (x1.py).  per/clear/cloud stay Americas-first.
     if clear is None or cloud is None:
         raise RuntimeError("X1 needs the satellites' clear/cloud verdicts (re-fetch the raw inputs)")
-    mask = X1.compute_mask(t, L, per, clear, cloud)              # Americas-first, as the tiles expect
+    sources = {}
+    mask = X1.compute_mask(t, L, per, clear, cloud, sources)     # Americas-first, as the tiles expect
 
     out = Path(a.out); vid = f"{t:%Y%m%dT%H}Z"
     vdir = out / "versions" / vid
     n = write_tiles(mask, vdir)
     Image.fromarray(mask).save(vdir / "_debug_cloud_mask.png")
     debug.land_debug(mask).save(vdir / "_debug_cloud_mask_land.png")
+    X1.source_map(sources, t).save(vdir / "_debug_sources.jpg", quality=90)
     debug.write_urls(vdir / "_sources.txt")
     (vdir / "_info.json").write_text(json.dumps({"slot": t.isoformat(), "built": datetime.now(timezone.utc).isoformat(),
                                                  "masks": used, "mean": round(float(mask.mean()) / 255, 4)}, indent=1))
