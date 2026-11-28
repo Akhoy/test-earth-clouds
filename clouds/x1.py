@@ -41,6 +41,7 @@ COLD_LO, COLD_HI = 95.0, 115.0    # (X25) clear-ground IR level ramp that marks 
 BOLD_GAMMA, MASK_BASE = 0.65, 0.55  # (X25) cold-region boost: gamma on the X19 cloud; mask-cloud floor
 HGT_LO, HGT_HI = 500.0, 4000.0    # (X25) cloud-top height ramp (m) that confirms cloud for the boost
 CLOUD_SCALE = 0.85    # (2026-11-20) user: clouds too bright on the phone; thickest cloud now ~76% white, not 90%
+SUN_REF, SUN_GAIN_MAX = 0.40, 2.5          # (2026-11-28) low-sun correction of the daytime photo
 SEA_MASK = Path(__file__).parent.parent / "assets" / "sea_mask_4096x2048.npz"   # Americas-first, 1 = sea
 
 
@@ -137,14 +138,20 @@ def compute_mask(t: datetime, L: dict, per: dict, clear: np.ndarray, cloud: np.n
     # Clear-ground brightness per region where the satellite masks say clear.  (2026-11-28) On high ground IR is not
     # required to agree: cold plateau ground (Tibet, Andes) reads cloudy in IR, so it got no reference of its own,
     # borrowed a darker lowland one and its bare ground drew as ~0.15 cloud (washed-out Himalaya).
-    blue = np.asarray(vis, np.float32)[..., 2] / 255.0
+    # (2026-11-28) Low-sun correction: the photo is raw reflectance, so thick cloud under a low sun reads dark (median
+    # 0.22 at cosz 0.1, 0.38 at 0.2 vs ~0.65 at cosz >= 0.4, 28 Nov 06Z) and drew as a half-transparent milky veil
+    # (Ukraine / south Russia in the morning).  Scale the photo up to the cosz-0.4 level, at most x2.5.
+    cz_g = np.roll(cosz, -W // 2, 1)                                              # Greenwich-first
+    sun_gain = np.clip(SUN_REF / np.maximum(cz_g, 0.05), 1.0, SUN_GAIN_MAX)[..., None].astype(np.float32)
+    vis_n = np.clip(np.asarray(vis, np.float32) * sun_gain, 0, 255)
+    blue = vis_n[..., 2] / 255.0
     high_g = np.asarray(elev_g, np.float32) > V.ELEVATION_HIGH[0]
     clear_px = _A(clear_v > 0.5) & ((v5parts["ir"] < 0.08) | high_g) & (vw(vis) > 0.3)
     thr = np.maximum(V5.VISIBLE_CLEAR, V._clear_ground_level(blue, clear_px) + V.VISIBLE_GROUND_MARGIN)
     fv = np.clip((blue - thr) / np.maximum(V5.VISIBLE_CLOUD - thr, 0.15), 0, 1) ** V5.VISIBLE_GAMMA   # Greenwich-first
     # (2026-11-28) Snow is not cloud: in the natural-colour RGB (R = 1.6 um, B = 0.6 um) snow is cyan (bright B, dark
     # R) and water cloud white.  Ice cloud is cyan too, so only where the satellite masks say clear.
-    red = np.asarray(vis, np.float32)[..., 0] / 255.0
+    red = vis_n[..., 0] / 255.0
     snowy = _ss((blue - red - 0.15) / 0.15) * _A(gf(clear_v, 1.5, mode=WRAP))
     fv = fv * (1 - snowy)
     sn = gf(np.asarray(snow, np.float32), W / 500, mode=WRAP)
