@@ -10,6 +10,8 @@ from __future__ import annotations
 from collections import OrderedDict
 from urllib.parse import urlencode
 
+from pathlib import Path
+
 import numpy as np
 import requests
 from PIL import Image, ImageDraw
@@ -69,6 +71,22 @@ def source_map(parts: dict, per: dict, mask: np.ndarray) -> Image.Image:
         d.text((x + 38, y + 8), f"{n}  {np.mean(cls[band] == i):.1%}", fill=(230, 230, 230))
     out = Image.new("RGB", (2048, 1024 + leg.height)); out.paste(img, (0, 0)); out.paste(leg, (0, 1024))
     return out
+
+
+def color_preview(mask: np.ndarray, cache_dir: Path) -> Image.Image:
+    """(2026-11-28) Colour check image: the published mask (Americas-first) as white cloud over NASA's Blue Marble
+    (public domain, GIBS BlueMarble_NextGeneration, fetched once into the cache), whole globe lit.  Cloud opacity as
+    the wallpaper's day shader (CLOUD_INTENSITY_DAY 0.9).  Not the phone's own textures (those stay in the APK)."""
+    import requests
+    p = cache_dir / "blue_marble_4096x2048.jpg"
+    if not p.exists():
+        r = requests.get("https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi", timeout=300, params=dict(
+            SERVICE="WMS", REQUEST="GetMap", VERSION="1.3.0", LAYERS="BlueMarble_NextGeneration", STYLES="",
+            CRS="EPSG:4326", BBOX="-90,-180,90,180", WIDTH=4096, HEIGHT=2048, FORMAT="image/jpeg"))
+        r.raise_for_status(); p.parent.mkdir(parents=True, exist_ok=True); p.write_bytes(r.content)
+    g = np.asarray(Image.open(p).convert("RGB").resize(mask.shape[::-1]), np.float32) / 255
+    c = (mask.astype(np.float32) / 255 * 0.9)[..., None]
+    return Image.fromarray(((g * (1 - c) + c) * 255).round().astype(np.uint8))
 
 
 def land_debug(mask: np.ndarray, land_level: float = 0.22) -> Image.Image:

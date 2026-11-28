@@ -159,6 +159,10 @@ def finish(a, t, L, flags, used, per, clear=None, cloud=None) -> int:
     Image.fromarray(np.where(nodata, 0, mask).astype(np.uint8)).save(vdir / "_debug_cloud_mask.png")
     debug.land_debug(mask).save(vdir / "_debug_cloud_mask_land.png")
     X1.source_map(sources, t, nodata).save(vdir / "_debug_sources.jpg", quality=92)
+    try:                                                         # (2026-11-28) colour check image
+        debug.color_preview(mask, V.CACHE_DIR).save(vdir / "_preview_color.jpg", quality=88)
+    except Exception as exc:
+        log.warning("colour preview failed: %r", exc)
     debug.write_urls(vdir / "_sources.txt")
     (vdir / "_info.json").write_text(json.dumps({"slot": t.isoformat(), "built": datetime.now(timezone.utc).isoformat(),
                                                  "masks": used, "mean": round(float(mask.mean()) / 255, 4)}, indent=1))

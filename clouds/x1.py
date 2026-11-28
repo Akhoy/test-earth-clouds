@@ -135,13 +135,28 @@ def compute_mask(t: datetime, L: dict, per: dict, clear: np.ndarray, cloud: np.n
     finally:
         V5._visible_weight = vw
     # ---- X28 day: pure visible (v5's desert-aware visible score + its snow / soften / haze / NASA-tone steps)
-    fv = np.asarray(v5parts["vis"], np.float32)                                # Greenwich-first
+    # Clear-ground brightness per region where the satellite masks say clear.  (2026-11-28) On high ground IR is not
+    # required to agree: cold plateau ground (Tibet, Andes) reads cloudy in IR, so it got no reference of its own,
+    # borrowed a darker lowland one and its bare ground drew as ~0.15 cloud (washed-out Himalaya).
+    blue = np.asarray(vis, np.float32)[..., 2] / 255.0
+    high_g = np.asarray(elev_g, np.float32) > V.ELEVATION_HIGH[0]
+    clear_px = _A(clear_v > 0.5) & ((v5parts["ir"] < 0.08) | high_g) & (vw(vis) > 0.3)
+    thr = np.maximum(V5.VISIBLE_CLEAR, V._clear_ground_level(blue, clear_px) + V.VISIBLE_GROUND_MARGIN)
+    fv = np.clip((blue - thr) / np.maximum(V5.VISIBLE_CLOUD - thr, 0.15), 0, 1) ** V5.VISIBLE_GAMMA   # Greenwich-first
+    # (2026-11-28) Snow is not cloud: in the natural-colour RGB (R = 1.6 um, B = 0.6 um) snow is cyan (bright B, dark
+    # R) and water cloud white.  Ice cloud is cyan too, so only where the satellite masks say clear.
+    red = np.asarray(vis, np.float32)[..., 0] / 255.0
+    snowy = _ss((blue - red - 0.15) / 0.15) * _A(gf(clear_v, 1.5, mode=WRAP))
+    fv = fv * (1 - snowy)
     sn = gf(np.asarray(snow, np.float32), W / 500, mode=WRAP)
     th = np.clip(sn / V5.SNOW_ICE_FULL_FRACTION, 0, 1) * V5.SNOW_ICE_MAX_THRESHOLD
     fv = np.clip((fv - th) / (1.0 - th), 0, 1)
     fv = (1.0 - V5.SOFTEN_BLEND) * fv + V5.SOFTEN_BLEND * gf(fv, W / 4096, mode=WRAP)
     fv = fv + V5.HAZE_OPACITY * gf(fv, W / 330, mode=WRAP) * (1.0 - fv)
-    mvis = _A(np.interp(fv, V5.NASA_TONE_IN, V5.NASA_TONE_OUT).astype(np.float32))
+    # (2026-11-28) The NASA tone curve lifts clear (0) to 0.06: a faint veil over all daylit ground (washed-out look,
+    # night clear stays 0).  Drop that floor so clear day ground is clear; the rest of the curve is unchanged.
+    t0 = V5.NASA_TONE_OUT[0]
+    mvis = _A(np.clip((np.interp(fv, V5.NASA_TONE_IN, V5.NASA_TONE_OUT) - t0) / (1 - t0), 0, 1).astype(np.float32))
 
     # ---- X19 night: Meteosat CLM replaces the classifier gate in the IR-only area
     nightw = _ss((0.2 - _A(vw(vis))) / 0.2)
@@ -186,15 +201,17 @@ def compute_mask(t: datetime, L: dict, per: dict, clear: np.ndarray, cloud: np.n
     if aod is not None:
         haze = HAZE_VEIL * _ss((gf(np.asarray(aod, np.float32), 4.0, mode=WRAP) - HAZE_AOD_LO) / (HAZE_AOD_HI - HAZE_AOD_LO))
         final = 1 - (1 - final) * (1 - haze)
+        if sources is not None:                               # source map: cloudy only because of the haze veil
+            sources["cls"][(sources["cls"] == -1) & (final > 0.15)] = 6
+            sources["final"] = final
     return (final * CLOUD_SCALE * 255).round().astype(np.uint8)
 
 
 # ---------------------------------------------------------------- source map (published as _debug_sources.png)
-SOURCE_NAMES = ["visible (EUMETSAT 3-hourly)", "matt IR+dust (night, classifier gate)",
-                "matt IR+dust where Meteosat CLM says cloud (gate lifted)", "cold-region boost (cloud-top height)",
-                "glint spot -> night layer", "polar no-data fill"]
+SOURCE_NAMES = ["visible (EUMETSAT 3-hourly)", "night: matt IR+dust", "night: Meteosat CLM gate lifted",
+                "cold-region boost (cloud top)", "glint spot -> night layer", "polar no-data fill", "haze veil (CAMS)"]
 SOURCE_COLOURS = np.array([[255, 220, 0], [170, 60, 255], [0, 160, 255], [0, 230, 60], [255, 255, 255],
-                           [255, 140, 0]], np.float32)
+                           [255, 140, 0], [200, 140, 90]], np.float32)
 
 
 def _classify(final, dl, keep, glint, vis_footprint, by_clm, by_cold) -> dict:
