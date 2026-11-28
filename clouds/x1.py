@@ -40,6 +40,7 @@ GATE_LO, GATE_HI = 0.05, 0.30     # (X19) classifier gate ramp (X1: 0.10 .. 0.45
 COLD_LO, COLD_HI = 95.0, 115.0    # (X25) clear-ground IR level ramp that marks a cold region
 BOLD_GAMMA, MASK_BASE = 0.65, 0.55  # (X25) cold-region boost: gamma on the X19 cloud; mask-cloud floor
 HGT_LO, HGT_HI = 500.0, 4000.0    # (X25) cloud-top height ramp (m) that confirms cloud for the boost
+HAZE_AOD_LO, HAZE_AOD_HI, HAZE_VEIL = 0.10, 0.80, 0.35   # (2026-11-28) CAMS haze veil: AOD ramp, max opacity
 CLOUD_SCALE = 0.85    # (2026-11-20) user: clouds too bright on the phone; thickest cloud now ~76% white, not 90%
 SEA_MASK = Path(__file__).parent.parent / "assets" / "sea_mask_4096x2048.npz"   # Americas-first, 1 = sea
 
@@ -179,6 +180,12 @@ def compute_mask(t: datetime, L: dict, per: dict, clear: np.ndarray, cloud: np.n
     final = np.clip(keep * final + (1 - keep) * fill, 0, 1)
     if sources is not None:
         sources.update(_classify(final, dl, keep, glint, _A(vw(vis)), by_clm, by_cold))
+    # ---- (2026-11-28) CAMS haze veil, whole globe, day and night: smog / smoke / dust as a soft veil over the cloud.
+    # AOD <= 0.10 (clean air, ~half the globe) adds nothing; full veil (0.35) at AOD 0.8 and above.
+    aod = L.get("aod")
+    if aod is not None:
+        haze = HAZE_VEIL * _ss((gf(np.asarray(aod, np.float32), 4.0, mode=WRAP) - HAZE_AOD_LO) / (HAZE_AOD_HI - HAZE_AOD_LO))
+        final = 1 - (1 - final) * (1 - haze)
     return (final * CLOUD_SCALE * 255).round().astype(np.uint8)
 
 

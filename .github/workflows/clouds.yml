@@ -42,6 +42,9 @@ jobs:
           restore-keys: clouds-cache-
 
       - name: Build cloud mask
+        env:                    # (2026-11-28) CAMS haze veil: Copernicus Atmosphere Data Store key (repo secret ADS_KEY)
+          CDSAPI_URL: https://ads.atmosphere.copernicus.eu/api
+          CDSAPI_KEY: ${{ secrets.ADS_KEY }}
         run: |
           python clouds/run.py --out site \
             --base-url "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}" \
