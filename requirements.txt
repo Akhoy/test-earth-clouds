@@ -5,5 +5,3 @@ scipy
 h5py
 global-land-mask
 scikit-learn
-cdsapi
-netCDF4

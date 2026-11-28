@@ -101,7 +101,7 @@ def main() -> int:
 
     if a.raw and Path(a.raw).exists():
         R = np.load(a.raw, allow_pickle=True)
-        t = datetime.fromisoformat(str(R["slot"])); L = {k: R[k] for k in ("vis", "ir", "dust", "elev", "snow", "cth", "aod") if k in R.files}
+        t = datetime.fromisoformat(str(R["slot"])); L = {k: R[k] for k in ("vis", "ir", "dust", "elev", "snow", "cth") if k in R.files}
         per = R["per"].item(); used = list(per); flags = np.max(np.stack(list(per.values())), 0)
         clear = R["clear"] if "clear" in R.files else None
         cloud = R["cloud"] if "cloud" in R.files else None
@@ -133,11 +133,6 @@ def main() -> int:
         L["cth"] = cth.fetch_height(t)
     except Exception as exc:                # no height -> no cold-region boost, the rest is unchanged
         log.warning("cloud-top height not available: %r", exc)
-    try:                                    # (2026-11-28) CAMS aerosol optical depth: haze veil
-        import cams
-        L["aod"] = cams.fetch_aod(t)
-    except Exception as exc:                # no AOD -> no haze veil, the rest is unchanged
-        log.warning("CAMS haze not available: %r", exc)
     if a.raw:
         np.savez(a.raw, slot=t.isoformat(), per=np.array(per, dtype=object), clear=clear, cloud=cloud, **L)
     return finish(a, t, L, flags, used, per, clear, cloud)
