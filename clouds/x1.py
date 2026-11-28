@@ -1,4 +1,14 @@
-"""X1 cloud mask (chosen 2026-11-20): the v5 look by day, matteason's IR + dust look elsewhere.
+"""X28 cloud mask (2026-11-28; was X1, chosen 2026-11-20).  Pure visible by day, matteason's IR + dust look elsewhere.
+
+X28 = X1 with three changes (developed in the ApkWork repo, cloud_pipeline/work_1120/x1_slot.py modes x14 / x25 / x28):
+  * Day: PURE visible from the slot's own 3-hourly EUMETSAT natural-colour mosaic -- v5's visible score alone (no IR
+    max, no mask-placed thin layer), measured against each region's own clear-ground brightness so sand is not cloud.
+  * Night (X19): matteason's formula with a lower clear-ground IR level (-CLEAR_DROP) and a looser classifier gate;
+    where Meteosat CLM says cloud the CLM replaces the gate.
+  * Night, cold regions (X25): where the clear ground reads cold in IR (frozen land, sea ice) AND EUMETSAT's cloud-top
+    height (cth.py) reports a cloud top, the cloud is made bolder and the nearest satellite's mask cloud is drawn.
+
+Original X1 description:
 
   * Inside EUMETSAT's daylit visible footprint: the frozen v5 checkpoint (visir_v5.py, unchanged), its thin cloud layer
     placed by the GOES-East/West + Himawari masks only.  Meteosat CLM is NOT used to place cloud (it drew flat grey
@@ -25,6 +35,11 @@ import visir_v5 as V5             # frozen v5 checkpoint (2026-11-15)
 
 H, W = 2048, 4096
 WRAP = ("nearest", "wrap")
+CLEAR_DROP = 8.0                  # (X19) clear-ground IR level lowered: warm low cloud was cut to 0 before the gate
+GATE_LO, GATE_HI = 0.05, 0.30     # (X19) classifier gate ramp (X1: 0.10 .. 0.45)
+COLD_LO, COLD_HI = 95.0, 115.0    # (X25) clear-ground IR level ramp that marks a cold region
+BOLD_GAMMA, MASK_BASE = 0.65, 0.55  # (X25) cold-region boost: gamma on the X19 cloud; mask-cloud floor
+HGT_LO, HGT_HI = 500.0, 4000.0    # (X25) cloud-top height ramp (m) that confirms cloud for the boost
 CLOUD_SCALE = 0.85    # (2026-11-20) user: clouds too bright on the phone; thickest cloud now ~76% white, not 90%
 SEA_MASK = Path(__file__).parent.parent / "assets" / "sea_mask_4096x2048.npz"   # Americas-first, 1 = sea
 
@@ -68,7 +83,7 @@ def compute_mask(t: datetime, L: dict, per: dict, clear: np.ndarray, cloud: np.n
     irg = _A(ir.astype(np.float32).mean(-1)); dust = _A(dust_u8).astype(np.float32) / 255
     ground_ir = V._clear_ground_level(irg, clear_v > 0.5, cell=32, fill_cells=3)
     clear_ir = np.maximum(np.clip(V._regional_percentile(irg, 10, 25.0), V.IR_CLEAR, V.IR_CLEAR_MAX),
-                          np.where(ground_ir > 0, ground_ir + 10, 0))
+                          np.where(ground_ir > 0, ground_ir + 10, 0)) - CLEAR_DROP
     rel = np.where(ground_ir > 0, irg - ground_ir, irg - clear_ir) / 50.0
     tex = np.sqrt(gf((irg - gf(irg, 2.0, mode=WRAP)) ** 2, 3.0, mode=WRAP)) / 10.0
     F = np.stack([dust[..., 0], dust[..., 1], dust[..., 2], rel, tex, dust[..., 0] * dust[..., 1], dust[..., 1] ** 2,
@@ -88,7 +103,8 @@ def compute_mask(t: datetime, L: dict, per: dict, clear: np.ndarray, cloud: np.n
     dust_raw = scr(dust[..., 0] * cold, 0.5 * cold)
     dust_g = V._clear_ground_level(dust_raw, clear_v > 0.5, cell=32)
     dust_m = np.clip((dust_raw - dust_g) / np.maximum(1 - dust_g, 0.2), 0, 1)
-    matt = np.sqrt(scr(dust_m, 0.77 * ir_m)) * _ss((p_cloud - 0.10) / (0.45 - 0.10))
+    matt_raw = np.sqrt(scr(dust_m, 0.77 * ir_m)).astype(np.float32)          # ungated matt formula
+    matt = matt_raw * _ss((p_cloud - GATE_LO) / (GATE_HI - GATE_LO))
     high = _ss((_A(elev_g) - V.ELEVATION_HIGH[0]) / (V.ELEVATION_HIGH[1] - V.ELEVATION_HIGH[0]))
     matt = (matt * (1 - 0.8 * high * (1 - gf(cloud_v, 1.5, mode=WRAP)))).astype(np.float32)
 
@@ -117,7 +133,37 @@ def compute_mask(t: datetime, L: dict, per: dict, clear: np.ndarray, cloud: np.n
         dl = _A(V5._visible_weight(vis))
     finally:
         V5._visible_weight = vw
-    final = dl * m5 + (1 - dl) * matt
+    # ---- X28 day: pure visible (v5's desert-aware visible score + its snow / soften / haze / NASA-tone steps)
+    fv = np.asarray(v5parts["vis"], np.float32)                                # Greenwich-first
+    sn = gf(np.asarray(snow, np.float32), W / 500, mode=WRAP)
+    th = np.clip(sn / V5.SNOW_ICE_FULL_FRACTION, 0, 1) * V5.SNOW_ICE_MAX_THRESHOLD
+    fv = np.clip((fv - th) / (1.0 - th), 0, 1)
+    fv = (1.0 - V5.SOFTEN_BLEND) * fv + V5.SOFTEN_BLEND * gf(fv, W / 4096, mode=WRAP)
+    fv = fv + V5.HAZE_OPACITY * gf(fv, W / 330, mode=WRAP) * (1.0 - fv)
+    mvis = _A(np.interp(fv, V5.NASA_TONE_IN, V5.NASA_TONE_OUT).astype(np.float32))
+
+    # ---- X19 night: Meteosat CLM replaces the classifier gate in the IR-only area
+    nightw = _ss((0.2 - _A(vw(vis))) / 0.2)
+    clm = np.max([np.nan_to_num(np.asarray(per[k], np.float32)) for k in per if k.startswith("Meteosat")]
+                 or [np.zeros((H, W), np.float32)], 0)
+    clm_cloud = _ss(gf(clm, 2.0, mode=WRAP) / 0.8) * nightw * matt_raw
+    night = np.maximum(matt, clm_cloud)
+    by_clm = clm_cloud > matt + 0.02                          # source map: CLM lifted the gate here
+    by_cold = np.zeros((H, W), bool)
+    # ---- X25: cold regions, only where EUMETSAT's cloud-top height confirms a top: bolder + nearest mask cloud
+    hgt = L.get("cth")
+    if hgt is not None:
+        has_top = gf(_ss((np.nan_to_num(np.asarray(hgt, np.float32), nan=0.0) - HGT_LO) / (HGT_HI - HGT_LO)), 1.5,
+                     mode=WRAP)
+        cold_w = gf(_ss((clear_ir - COLD_LO) / (COLD_HI - COLD_LO)), 3.0, mode=WRAP) * nightw * has_top
+        bold = np.clip(night, 0, 1) ** (1 - (1 - BOLD_GAMMA) * cold_w)
+        mask_cloud = np.maximum(_ss(gf(cloud_v, 2.0, mode=WRAP) / 0.8), has_top) * nightw \
+            * (MASK_BASE + (1 - MASK_BASE) * matt_raw)
+        boosted = np.maximum(bold, cold_w * mask_cloud)
+        by_cold = boosted > night + 0.02                      # source map: cold-region boost added cloud here
+        night = boosted
+    night = night.astype(np.float32)
+    final = dl * mvis + (1 - dl) * night
 
     # ---- polar no-data cap: soft normalised-convolution fill from the surrounding cloud
     has_ir = (np.asarray(ir).max(-1) < 250) & (np.asarray(dust_u8).max(-1) > 0)
@@ -132,35 +178,29 @@ def compute_mask(t: datetime, L: dict, per: dict, clear: np.ndarray, cloud: np.n
     keep = gf(has.astype(np.float32), 8.0, mode=WRAP) * has
     final = np.clip(keep * final + (1 - keep) * fill, 0, 1)
     if sources is not None:
-        sources.update(_classify(final, dl, keep, glint, _A(vw(vis)), v5parts, per))
+        sources.update(_classify(final, dl, keep, glint, _A(vw(vis)), by_clm, by_cold))
     return (final * CLOUD_SCALE * 255).round().astype(np.uint8)
 
 
 # ---------------------------------------------------------------- source map (published as _debug_sources.png)
-SOURCE_NAMES = ["v5 visible (EUMETSAT)", "v5 IR", "v5 thin: cold-land rule", "v5 thin: GOES-East mask",
-                "v5 thin: GOES-West mask", "v5 thin: Himawari mask", "C18 matt IR+dust (no visible)", "glint spot -> matt",
-                "polar no-data fill"]
-SOURCE_COLOURS = np.array([[255, 220, 0], [0, 160, 255], [200, 200, 200], [255, 40, 40], [255, 80, 220], [0, 230, 60],
-                           [170, 60, 255], [255, 255, 255], [255, 140, 0]], np.float32)
+SOURCE_NAMES = ["visible (EUMETSAT 3-hourly)", "matt IR+dust (night, classifier gate)",
+                "matt IR+dust where Meteosat CLM says cloud (gate lifted)", "cold-region boost (cloud-top height)",
+                "glint spot -> night layer", "polar no-data fill"]
+SOURCE_COLOURS = np.array([[255, 220, 0], [170, 60, 255], [0, 160, 255], [0, 230, 60], [255, 255, 255],
+                           [255, 140, 0]], np.float32)
 
 
-def _classify(final, dl, keep, glint, vis_footprint, p, per) -> dict:
+def _classify(final, dl, keep, glint, vis_footprint, by_clm, by_cold) -> dict:
     """Which source drew each cloudy pixel (Americas-first); -1 = clear (final < 0.15)."""
-    vis_w = _A(p["day"] * p["vis"] > np.maximum(p["ir"], p["thin"]))
-    thin_w = _A(p["thin"] > p["ir"]) & ~vis_w
-    per_g = [_A(np.nan_to_num(np.asarray(per[k], np.float32))) for k in ("GOES-East", "GOES-West", "Himawari-9")
-             if k in per]
-    who = _A(np.argmax(np.stack([p["coldl"]] + per_g), 0))
     cloudy = final > 0.15
     cls = np.full(final.shape, -1, np.int8)
-    pv5 = dl > 0.5
-    cls[pv5 & cloudy] = 1
-    sel = pv5 & cloudy & thin_w
-    cls[sel] = 2 + who[sel]
-    cls[pv5 & cloudy & vis_w] = 0
-    cls[~pv5 & cloudy] = 6
-    cls[(vis_footprint > 0.5) & (glint < 0.5) & cloudy] = 7
-    cls[(keep < 0.5) & cloudy] = 8
+    day = dl > 0.5
+    cls[day & cloudy] = 0
+    cls[~day & cloudy] = 1
+    cls[~day & cloudy & by_clm] = 2
+    cls[~day & cloudy & by_cold] = 3
+    cls[(vis_footprint > 0.5) & (glint < 0.5) & cloudy] = 4
+    cls[(keep < 0.5) & cloudy] = 5
     return {"cls": cls, "final": final}
 
 
@@ -201,7 +241,7 @@ def source_map(sources: dict, t: datetime, nodata: np.ndarray | None = None):
     f26, f18 = _font(26), _font(18)
     leg = Image.new("RGB", (2048, 320), (0, 0, 0)); d = ImageDraw.Draw(leg)
     dec, sl = _sun(t)
-    d.text((20, 8), f"X1, {t:%d %b %Y %H:%M}Z  (subsolar {np.degrees(sl):.0f}E, dec {np.degrees(dec):.1f})",
+    d.text((20, 8), f"X28, {t:%d %b %Y %H:%M}Z  (subsolar {np.degrees(sl):.0f}E, dec {np.degrees(dec):.1f})",
            fill=(255, 255, 255), font=f26)
     items = [(n, tuple(int(v) for v in c), np.mean(cls[inside] == i) * 100) for i, (n, c) in enumerate(zip(SOURCE_NAMES, SOURCE_COLOURS))]
     items.append(("clear (mask < 0.15)", (45, 45, 45), np.mean(cls[inside] == -1) * 100))

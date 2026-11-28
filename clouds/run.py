@@ -101,7 +101,7 @@ def main() -> int:
 
     if a.raw and Path(a.raw).exists():
         R = np.load(a.raw, allow_pickle=True)
-        t = datetime.fromisoformat(str(R["slot"])); L = {k: R[k] for k in ("vis", "ir", "dust", "elev", "snow")}
+        t = datetime.fromisoformat(str(R["slot"])); L = {k: R[k] for k in ("vis", "ir", "dust", "elev", "snow", "cth") if k in R.files}
         per = R["per"].item(); used = list(per); flags = np.max(np.stack(list(per.values())), 0)
         clear = R["clear"] if "clear" in R.files else None
         cloud = R["cloud"] if "cloud" in R.files else None
@@ -128,13 +128,18 @@ def main() -> int:
 
     flags, used, per, clear, cloud = fetch_flags(t, W)
     log.info("satellite masks used: %s", ", ".join(used) or "none")
+    try:                                    # (X28) EUMETSAT cloud-top height: confirms cloud for the cold-region boost
+        import cth
+        L["cth"] = cth.fetch_height(t)
+    except Exception as exc:                # no height -> no cold-region boost, the rest is unchanged
+        log.warning("cloud-top height not available: %r", exc)
     if a.raw:
         np.savez(a.raw, slot=t.isoformat(), per=np.array(per, dtype=object), clear=clear, cloud=cloud, **L)
     return finish(a, t, L, flags, used, per, clear, cloud)
 
 
 def finish(a, t, L, flags, used, per, clear=None, cloud=None) -> int:
-    # (2026-11-20) X1 look: v5 by day + matteason IR/dust elsewhere (x1.py).  per/clear/cloud stay Americas-first.
+    # (2026-11-28) X28 look: pure visible by day + matteason IR/dust elsewhere (x1.py).  per/clear/cloud stay Americas-first.
     if clear is None or cloud is None:
         raise RuntimeError("X1 needs the satellites' clear/cloud verdicts (re-fetch the raw inputs)")
     sources = {}

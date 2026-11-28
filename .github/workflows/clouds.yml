@@ -1,11 +1,9 @@
-name: Build and publish cloud mask (every 3 hours)
+name: Build and publish cloud mask (every 3 hours, via cron-job.org)
 
 on:
-  schedule:
-    # Attempts every 15 min (2026-11-20; was hourly): GitHub's scheduler is best-effort and fired only 4 of the first ~16 three-hourly triggers
-    # (2026-11-15/16).  Each run builds the latest complete 3-hour slot (~1.5 h after the scan) and exits early when
-    # the published root.json already points at it, so the extra attempts cost ~30 s each.
-    - cron: "*/15 * * * *"
+  # (2026-11-28) Started from cron-job.org, not GitHub's own scheduler: POST to this workflow's /dispatches at 02:50,
+  # 05:50 ... 23:50 UTC (about 10 min after EUMETSAT publishes each 3-hourly mosaic, ~2 h 42 min after its slot) plus a
+  # retry at 00:15, 03:15 ... 21:15 UTC.  A run whose slot is already published exits early (--skip-if-current).
   workflow_dispatch:
     inputs:
       slot:
