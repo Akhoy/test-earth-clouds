@@ -1,0 +1,26 @@
+GET https://view.eumetsat.int/geoserver/ows?service=WMS&request=GetMap&version=1.3.0&layers=mumi%3Awideareacoverage_rgb_natural&styles=&format=image%2Fpng&crs=EPSG%3A4326&bbox=-90%2C0%2C90%2C180&width=2048&height=2048&time=2026-11-28T03%3A00%3A00.000Z
+GET https://view.eumetsat.int/geoserver/ows?service=WMS&request=GetMap&version=1.3.0&layers=mumi%3Awideareacoverage_rgb_natural&styles=&format=image%2Fpng&crs=EPSG%3A4326&bbox=-90%2C-180%2C90%2C0&width=2048&height=2048&time=2026-11-28T03%3A00%3A00.000Z
+GET https://view.eumetsat.int/geoserver/ows?service=WMS&request=GetMap&version=1.3.0&layers=mumi%3Aworldcloudmap_ir108&styles=&format=image%2Fpng&crs=EPSG%3A4326&bbox=-90%2C0%2C90%2C180&width=2048&height=2048&time=2026-11-28T03%3A00%3A00.000Z
+GET https://view.eumetsat.int/geoserver/ows?service=WMS&request=GetMap&version=1.3.0&layers=mumi%3Aworldcloudmap_ir108&styles=&format=image%2Fpng&crs=EPSG%3A4326&bbox=-90%2C-180%2C90%2C0&width=2048&height=2048&time=2026-11-28T03%3A00%3A00.000Z
+GET https://view.eumetsat.int/geoserver/ows?service=WMS&request=GetMap&version=1.3.0&layers=mumi%3Awideareacoverage_rgb_dust&styles=&format=image%2Fpng&crs=EPSG%3A4326&bbox=-90%2C0%2C90%2C180&width=2048&height=2048&time=2026-11-28T03%3A00%3A00.000Z
+GET https://view.eumetsat.int/geoserver/ows?service=WMS&request=GetMap&version=1.3.0&layers=mumi%3Awideareacoverage_rgb_dust&styles=&format=image%2Fpng&crs=EPSG%3A4326&bbox=-90%2C-180%2C90%2C0&width=2048&height=2048&time=2026-11-28T03%3A00%3A00.000Z
+GET https://view.eumetsat.int/geoserver/wms?service=WMS&version=1.3.0&request=GetMap&layers=msg_fes%3Aclm&styles=&crs=EPSG%3A4326&bbox=-77.0%2C-77.0%2C77.0%2C77.0&width=1753&height=1753&format=image%2Fpng&time=2026-11-28T03%3A00%3A00.000Z
+GET https://view.eumetsat.int/geoserver/wms?service=WMS&version=1.3.0&request=GetMap&layers=msg_iodc%3Aclm&styles=&crs=EPSG%3A4326&bbox=-77.0%2C-35.5%2C77.0%2C118.5&width=1752&height=1753&format=image%2Fpng&time=2026-11-28T03%3A00%3A00.000Z
+GET https://noaa-goes19.s3.amazonaws.com/?list-type=2&prefix=ABI-L2-ACMF/2026/332/03/
+GET https://noaa-goes18.s3.amazonaws.com/?list-type=2&prefix=ABI-L2-ACMF/2026/332/03/
+GET https://noaa-himawari9.s3.amazonaws.com/?list-type=2&prefix=AHI-L2-FLDK-Clouds/2026/11/28/0300/
+GET https://noaa-goes18.s3.amazonaws.com/ABI-L2-ACMF/2026/332/03/OR_ABI-L2-ACMF-M6_G18_s20263320300210_e20263320309518_c20263320310160.nc
+HEAD https://noaa-himawari9.s3.amazonaws.com/AHI-L2-FLDK-Clouds/2026/11/28/0300/AHI-CMSK_v1r1_h09_s202611280300209_e202611280309403_c202611280314062.nc
+GET https://noaa-goes19.s3.amazonaws.com/ABI-L2-ACMF/2026/332/03/OR_ABI-L2-ACMF-M6_G19_s20263320300207_e20263320309515_c20263320310209.nc
+GET https://noaa-himawari9.s3.amazonaws.com/AHI-L2-FLDK-Clouds/2026/11/28/0300/AHI-CMSK_v1r1_h09_s202611280300209_e202611280309403_c202611280314062.nc   (x386)
+GET https://view.eumetsat.int/geoserver/wms?service=WMS&version=1.3.0&request=GetLegendGraphic&format=image%2Fpng&width=640&height=80&layer=msg_fes%3Acth
+GET https://view.eumetsat.int/geoserver/wms?service=WMS&version=1.3.0&request=GetMap&layers=msg_fes%3Acth&styles=&crs=EPSG%3A4326&bbox=-77.0%2C-77.0%2C77.0%2C77.0&width=1753&height=1753&format=image%2Fpng&transparent=true&time=2026-11-28T03%3A00%3A00.000Z
+GET https://view.eumetsat.int/geoserver/wms?service=WMS&version=1.3.0&request=GetMap&layers=msg_iodc%3Acth&styles=&crs=EPSG%3A4326&bbox=-77.0%2C-35.5%2C77.0%2C118.5&width=1752&height=1753&format=image%2Fpng&transparent=true&time=2026-11-28T03%3A00%3A00.000Z
+GET https://ads.atmosphere.copernicus.eu/api/catalogue/v1/messages
+GET https://ads.atmosphere.copernicus.eu/api/retrieve/v1/processes/cams-global-atmospheric-composition-forecasts   (x2)
+POST https://ads.atmosphere.copernicus.eu/api/retrieve/v1/processes/cams-global-atmospheric-composition-forecasts/execution   (x2)
+GET https://ads.atmosphere.copernicus.eu/api/retrieve/v1/jobs/978588de-cd0f-40e9-9e2a-395e487860c9?log=True&request=True   (x10)
+GET https://ads.atmosphere.copernicus.eu/api/retrieve/v1/jobs/978588de-cd0f-40e9-9e2a-395e487860c9
+GET https://ads.atmosphere.copernicus.eu/api/retrieve/v1/jobs/978588de-cd0f-40e9-9e2a-395e487860c9/results
+HEAD https://object-store.os-api.cci2.ecmwf.int:443/cci2-prod-cache-3/2026-11-28/4f7c1768c814cdf0d8aed82495cbfba8.nc
+GET https://object-store.os-api.cci2.ecmwf.int:443/cci2-prod-cache-3/2026-11-28/4f7c1768c814cdf0d8aed82495cbfba8.nc

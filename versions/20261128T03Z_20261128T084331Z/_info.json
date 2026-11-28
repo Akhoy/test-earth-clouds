@@ -1,0 +1,12 @@
+{
+ "slot": "2026-11-28T03:00:00+00:00",
+ "built": "2026-11-28T08:43:36.286969+00:00",
+ "masks": [
+  "Meteosat 0 CLM",
+  "Meteosat 45.5E CLM",
+  "GOES-East",
+  "GOES-West",
+  "Himawari-9"
+ ],
+ "mean": 0.4156
+}
