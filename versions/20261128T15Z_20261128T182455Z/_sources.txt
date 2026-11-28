@@ -1,0 +1,19 @@
+GET https://Akhoy.github.io/test-earth-clouds/root.json
+GET https://view.eumetsat.int/geoserver/ows?service=WMS&request=GetMap&version=1.3.0&layers=mumi%3Awideareacoverage_rgb_natural&styles=&format=image%2Fpng&crs=EPSG%3A4326&bbox=-90%2C0%2C90%2C180&width=2048&height=2048&time=2026-11-28T15%3A00%3A00.000Z
+GET https://view.eumetsat.int/geoserver/ows?service=WMS&request=GetMap&version=1.3.0&layers=mumi%3Awideareacoverage_rgb_natural&styles=&format=image%2Fpng&crs=EPSG%3A4326&bbox=-90%2C-180%2C90%2C0&width=2048&height=2048&time=2026-11-28T15%3A00%3A00.000Z
+GET https://view.eumetsat.int/geoserver/ows?service=WMS&request=GetMap&version=1.3.0&layers=mumi%3Aworldcloudmap_ir108&styles=&format=image%2Fpng&crs=EPSG%3A4326&bbox=-90%2C0%2C90%2C180&width=2048&height=2048&time=2026-11-28T15%3A00%3A00.000Z
+GET https://view.eumetsat.int/geoserver/ows?service=WMS&request=GetMap&version=1.3.0&layers=mumi%3Aworldcloudmap_ir108&styles=&format=image%2Fpng&crs=EPSG%3A4326&bbox=-90%2C-180%2C90%2C0&width=2048&height=2048&time=2026-11-28T15%3A00%3A00.000Z
+GET https://view.eumetsat.int/geoserver/ows?service=WMS&request=GetMap&version=1.3.0&layers=mumi%3Awideareacoverage_rgb_dust&styles=&format=image%2Fpng&crs=EPSG%3A4326&bbox=-90%2C0%2C90%2C180&width=2048&height=2048&time=2026-11-28T15%3A00%3A00.000Z
+GET https://view.eumetsat.int/geoserver/ows?service=WMS&request=GetMap&version=1.3.0&layers=mumi%3Awideareacoverage_rgb_dust&styles=&format=image%2Fpng&crs=EPSG%3A4326&bbox=-90%2C-180%2C90%2C0&width=2048&height=2048&time=2026-11-28T15%3A00%3A00.000Z
+GET https://view.eumetsat.int/geoserver/wms?service=WMS&version=1.3.0&request=GetMap&layers=msg_fes%3Aclm&styles=&crs=EPSG%3A4326&bbox=-77.0%2C-77.0%2C77.0%2C77.0&width=1753&height=1753&format=image%2Fpng&time=2026-11-28T15%3A00%3A00.000Z
+GET https://view.eumetsat.int/geoserver/wms?service=WMS&version=1.3.0&request=GetMap&layers=msg_iodc%3Aclm&styles=&crs=EPSG%3A4326&bbox=-77.0%2C-35.5%2C77.0%2C118.5&width=1752&height=1753&format=image%2Fpng&time=2026-11-28T15%3A00%3A00.000Z
+GET https://noaa-goes19.s3.amazonaws.com/?list-type=2&prefix=ABI-L2-ACMF/2026/332/15/
+GET https://noaa-goes18.s3.amazonaws.com/?list-type=2&prefix=ABI-L2-ACMF/2026/332/15/
+GET https://noaa-himawari9.s3.amazonaws.com/?list-type=2&prefix=AHI-L2-FLDK-Clouds/2026/11/28/1500/
+GET https://noaa-goes19.s3.amazonaws.com/ABI-L2-ACMF/2026/332/15/OR_ABI-L2-ACMF-M6_G19_s20263321500210_e20263321509518_c20263321510219.nc
+HEAD https://noaa-himawari9.s3.amazonaws.com/AHI-L2-FLDK-Clouds/2026/11/28/1500/AHI-CMSK_v1r1_h09_s202611281500210_e202611281509404_c202611281514057.nc
+GET https://noaa-goes18.s3.amazonaws.com/ABI-L2-ACMF/2026/332/15/OR_ABI-L2-ACMF-M6_G18_s20263321500213_e20263321509521_c20263321510150.nc
+GET https://noaa-himawari9.s3.amazonaws.com/AHI-L2-FLDK-Clouds/2026/11/28/1500/AHI-CMSK_v1r1_h09_s202611281500210_e202611281509404_c202611281514057.nc   (x368)
+GET https://view.eumetsat.int/geoserver/wms?service=WMS&version=1.3.0&request=GetLegendGraphic&format=image%2Fpng&width=640&height=80&layer=msg_fes%3Acth
+GET https://view.eumetsat.int/geoserver/wms?service=WMS&version=1.3.0&request=GetMap&layers=msg_fes%3Acth&styles=&crs=EPSG%3A4326&bbox=-77.0%2C-77.0%2C77.0%2C77.0&width=1753&height=1753&format=image%2Fpng&transparent=true&time=2026-11-28T15%3A00%3A00.000Z
+GET https://view.eumetsat.int/geoserver/wms?service=WMS&version=1.3.0&request=GetMap&layers=msg_iodc%3Acth&styles=&crs=EPSG%3A4326&bbox=-77.0%2C-35.5%2C77.0%2C118.5&width=1752&height=1753&format=image%2Fpng&transparent=true&time=2026-11-28T15%3A00%3A00.000Z
